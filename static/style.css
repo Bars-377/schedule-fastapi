@@ -1,70 +1,20 @@
-/* Общие стили для всего сайта */
+/* ===== Общие стили ===== */
 body {
     font-family: Arial, sans-serif;
-    /* margin: 10px; */
     padding: 30px;
-    background-color: #f0f0f0;
+    background-color: #f5f5f5;
+    color: #333;
+    margin: 0;
 }
 
-h2, p {
+h2, h3, p {
     text-align: center;
-}
-
-/* Центрирование форм на auth_form и register_form */
-.centered-form-body {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-}
-
-form {
-    background: white;
-    padding: 30px;
-    border-radius: 10px;
-    box-shadow: 0 0 10px rgba(0,0,0,0.1);
-    text-align: center;
-}
-
-/* Поля ввода и кнопки */
-input[type="text"], input[type="password"], input[type="number"] {
-    width: 100%;
-    padding: 5px;
-    margin-bottom: 15px;
-    box-sizing: border-box;
-}
-
-input[type="submit"] {
-    padding: 8px 20px;
-    cursor: pointer;
-}
-
-/* Стили для таблицы */
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 20px;
-    background: white;
-    
-}
-
-th, td {
-    border: 1px solid #333;
-    
-    padding: 8px;
-    text-align: center;
-}
-
-th {
-    
-    background-color: #ddd;
+    margin: 10px 0;
 }
 
 a {
-    
-    margin: 0 5px;
-    text-decoration: none;
     color: #0066cc;
+    text-decoration: none;
 }
 
 a:hover {
@@ -73,57 +23,143 @@ a:hover {
 
 .msg-green {
     color: green;
-}
-
-/* Форма добавления отдела на странице таблицы */
-.add-department-form {
-    margin: 20px auto; /* Автоматические отступы слева и справа */
-    background: white;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 0 0 10px rgba(0,0,0,0.1);
-    display: block; /* важно убрать inline-block */
-    width: 500px; /* задаем фиксированную ширину */
-    text-align: center; /* выравнивание текста и элементов внутри */
-}
-
-.pagination-form {
-    display: flex;             /* Используем flex */
-    justify-content: flex-end; /* Выравнивание по правому краю */
-    padding: 15px 20px;
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 0 10px rgba(0,0,0,0.1);
-    margin-top: 20px;          /* Внешний отступ сверху */
-}
-
-.pagination-form a {
-    margin: 0 5px;
-    text-decoration: none;
-    color: #0066cc;
     font-weight: bold;
 }
 
-.pagination-form a:hover {
-    text-decoration: underline;
+/* ===== Центрирование форм ===== */
+.centered-form-body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
 }
 
+/* ===== Основные формы (авторизация, регистрация, добавление отдела) ===== */
+form:not(.table-form) {
+    background: #fff;
+    padding: 25px 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    text-align: center;
+    width: 100%;
+    max-width: 400px;
+}
+
+input[type="text"], input[type="password"], input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    margin: 10px 0;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+input[type="submit"] {
+    padding: 8px 20px;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    background-color: #0066cc;
+    color: white;
+    font-weight: bold;
+    transition: background-color 0.2s ease;
+}
+
+input[type="submit"]:hover {
+    background-color: #004999;
+}
+
+/* ===== Таблицы ===== */
 .table-container {
     width: 100%;
-    overflow-x: auto;       /* горизонтальная прокрутка */
-    -webkit-overflow-scrolling: touch; /* плавная прокрутка на мобильных */
+    overflow-x: auto;
+    margin: 20px 0;
 }
 
-.table-container table {
+table {
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
-    width: max-content;     /* таблица будет столько широкой, сколько нужно контенту */
-    min-width: 100%;        /* минимум ширина равна ширине контейнера */
+    background: white;
 }
 
-.table-container th, .table-container td {
+th, td {
     border: 1px solid #ccc;
-    padding: 8px;
-    text-align: left;
-    white-space: nowrap;    /* запрещает перенос текста на новую строку */
+    padding: 10px 15px;
+    text-align: center;
+    white-space: nowrap;
 }
 
+th {
+    background-color: #e0e0e0;
+    font-weight: bold;
+}
+
+/* ===== Формы внутри таблицы ===== */
+td form {
+    margin: 0;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    width: auto;
+    text-align: center;
+}
+
+td input[type="number"] {
+    width: 80px;
+    padding: 5px;
+}
+
+td input[type="submit"] {
+    padding: 4px 12px;
+    font-size: 0.9em;
+}
+
+/* ===== Форма добавления отдела ===== */
+.add-department-form {
+    margin: 20px auto;
+    padding: 20px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 500px;
+    text-align: center;
+}
+
+.add-department-form input[type="text"] {
+    width: 70%;
+    margin-right: 10px;
+}
+
+/* ===== Пагинация ===== */
+.pagination-form {
+    display: flex;
+    justify-content: center;
+    gap: 5px;
+    padding: 15px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    margin-top: 20px;
+}
+
+.pagination-form a {
+    font-weight: bold;
+    padding: 5px 10px;
+    border-radius: 5px;
+    color: #0066cc;
+    text-decoration: none;
+    transition: background-color 0.2s ease;
+}
+
+.pagination-form a:hover {
+    background-color: #e0e0e0;
+}
+
+.pagination-form strong {
+    padding: 5px 10px;
+    border-radius: 5px;
+    background-color: #0066cc;
+    color: white;
+}

@@ -8,10 +8,10 @@
 <body class="centered-form-body">
     <form method="post" action="/register">
         <h2>Регистрация пользователя</h2>
-        Имя пользователя: <input type="text" name="username" required><br>
-        Пароль: <input type="password" name="password" required><br>
-        Права на редактирование (0 или 1): <input type="number" name="can_edit" min="0" max="1" value="0"><br>
-        <input type="submit" value="Зарегистрироваться"><br>
+        <input type="text" name="username" placeholder="Имя пользователя" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <input type="number" name="can_edit" min="0" max="1" value="0" placeholder="Права на редактирование">
+        <input type="submit" value="Зарегистрироваться">
         <p>Уже есть аккаунт? <a href='/login_form'>Войти</a></p>
     </form>
 </body>

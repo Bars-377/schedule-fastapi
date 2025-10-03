@@ -306,7 +306,8 @@ async def update_branch_data(
     await db.commit()
     await db.refresh(branch_data)  # важно, чтобы появился id для новых записей
 
-    return RedirectResponse(f"/?page={page}", status_code=303)
+    # --- Передаем msg в URL для отображения ---
+    return RedirectResponse(f"/?page={page}&msg=Сохранено", status_code=303)
 
 # --- Удаление филиала ---
 @app.post("/delete/{row_id}")
