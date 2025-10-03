@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Таблица отделов</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h2>Таблица отделов</h2>
+    <p>Привет, {{ user.username }} | <a href='/logout'>Выйти</a></p>
+
+    {% if msg %}
+        <p class="msg-green">{{ msg }}</p>
+    {% endif %}
+
+    <div class="table-container">
+        <table>
+            <tr>
+                <th>Отдел</th>
+                {% for metric in metrics %}
+                    {% if loop.first %}
+                        <th>{{ metric.name }} (ред.)</th>
+                    {% else %}
+                        <th>{{ metric.name }}</th>
+                    {% endif %}
+                {% endfor %}
+                <th>Дата ред.</th>
+                <th>Действие</th>
+            </tr>
+
+            {% for row in table_data %}
+                <tr>
+                    <td>{{ row.branch_name }}</td>
+                        {% for metric_name, metric_data in row.metrics.items() %}
+                            {% if user.can_edit == 1 and loop.index0 == 0 %}
+                                <td>
+                                    <form method="post" action="/update/{{ metric_data.id }}">
+                                        <input type="number" name="value" step="any" value="{{ metric_data.value }}">
+                                        <input type="hidden" name="branch_id" value="{{ row.branch_id }}">
+                                        <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
+                                        <input type="hidden" name="page" value="{{ page }}">
+                                        <br>
+                                        <input type="submit" value="Сохранить">
+                                    </form>
+                                </td>
+                            {% else %}
+                                <td>{{ metric_data.value }}</td>
+                            {% endif %}
+                        {% endfor %}
+
+                    <!-- Дата редактирования: берем первую метрику, если есть -->
+                    <td>
+                        {% set first_metric = row.metrics|dictsort|first %}
+                        {% if first_metric %}
+                            {% if first_metric[1].record_date %}
+                                {{ first_metric[1].record_date }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if user.can_edit == 1 %}
+                            <form method="post" action="/delete/{{ row.branch_id }}">
+                                <input type="hidden" name="page" value="{{ page }}">
+                                <input type="submit" value="Удалить">
+                            </form>
+                        {% else %}
+                            Нет прав
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="pagination-form">
+        {% if start_page > 1 %}
+            <a href='/?page=1'>1</a>
+            {% if start_page > 2 %}…{% endif %}
+        {% endif %}
+
+        {% for p in range(start_page, end_page + 1) %}
+            {% if p == page %}
+                <strong>{{ p }}</strong>
+            {% else %}
+                <a href='/?page={{ p }}'>{{ p }}</a>
+            {% endif %}
+        {% endfor %}
+
+        {% if end_page < total_pages %}
+            {% if end_page < total_pages - 1 %}…{% endif %}
+            <a href='/?page={{ total_pages }}'>{{ total_pages }}</a>
+        {% endif %}
+    </div>
+
+    {% if user.can_edit == 1 %}
+        <div class="add-department-form">
+            <h3>Добавить отдел</h3>
+            <form method="post" action="/add">
+                Отдел: <input type="text" name="name">
+                <input type="submit" value="Добавить">
+            </form>
+        </div>
+    {% endif %}
+</body>
+</html>

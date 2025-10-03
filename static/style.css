@@ -1,0 +1,129 @@
+/* Общие стили для всего сайта */
+body {
+    font-family: Arial, sans-serif;
+    /* margin: 10px; */
+    padding: 30px;
+    background-color: #f0f0f0;
+}
+
+h2, p {
+    text-align: center;
+}
+
+/* Центрирование форм на auth_form и register_form */
+.centered-form-body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+form {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    text-align: center;
+}
+
+/* Поля ввода и кнопки */
+input[type="text"], input[type="password"], input[type="number"] {
+    width: 100%;
+    padding: 5px;
+    margin-bottom: 15px;
+    box-sizing: border-box;
+}
+
+input[type="submit"] {
+    padding: 8px 20px;
+    cursor: pointer;
+}
+
+/* Стили для таблицы */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+    background: white;
+    
+}
+
+th, td {
+    border: 1px solid #333;
+    
+    padding: 8px;
+    text-align: center;
+}
+
+th {
+    
+    background-color: #ddd;
+}
+
+a {
+    
+    margin: 0 5px;
+    text-decoration: none;
+    color: #0066cc;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.msg-green {
+    color: green;
+}
+
+/* Форма добавления отдела на странице таблицы */
+.add-department-form {
+    margin: 20px auto; /* Автоматические отступы слева и справа */
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    display: block; /* важно убрать inline-block */
+    width: 500px; /* задаем фиксированную ширину */
+    text-align: center; /* выравнивание текста и элементов внутри */
+}
+
+.pagination-form {
+    display: flex;             /* Используем flex */
+    justify-content: flex-end; /* Выравнивание по правому краю */
+    padding: 15px 20px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    margin-top: 20px;          /* Внешний отступ сверху */
+}
+
+.pagination-form a {
+    margin: 0 5px;
+    text-decoration: none;
+    color: #0066cc;
+    font-weight: bold;
+}
+
+.pagination-form a:hover {
+    text-decoration: underline;
+}
+
+.table-container {
+    width: 100%;
+    overflow-x: auto;       /* горизонтальная прокрутка */
+    -webkit-overflow-scrolling: touch; /* плавная прокрутка на мобильных */
+}
+
+.table-container table {
+    border-collapse: collapse;
+    width: max-content;     /* таблица будет столько широкой, сколько нужно контенту */
+    min-width: 100%;        /* минимум ширина равна ширине контейнера */
+}
+
+.table-container th, .table-container td {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: left;
+    white-space: nowrap;    /* запрещает перенос текста на новую строку */
+}
+

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="centered-form-body">
+    <form method="post" action="{{ action }}">
+        <h2>{{ title }}</h2>
+        Имя пользователя: <input type="text" name="username" required><br>
+        Пароль: <input type="password" name="password" required><br>
+        <input type="submit" value="{{ submit_text }}"><br>
+        {% if register_link %}
+        <p>Нет аккаунта? <a href='/register_form'>Зарегистрироваться</a></p>
+        {% endif %}
+    </form>
+</body>
+</html>
