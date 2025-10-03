@@ -63,6 +63,7 @@ input[type="submit"] {
     color: white;
     font-weight: bold;
     transition: background-color 0.2s ease;
+    margin-bottom: 10px; /* отступ только снизу */
 }
 
 input[type="submit"]:hover {
@@ -76,23 +77,77 @@ input[type="submit"]:hover {
     margin: 20px 0;
 }
 
-table {
-    width: max-content;
-    min-width: 100%;
+.table-container table {
     border-collapse: collapse;
+    table-layout: auto; /* подстраивается под содержимое */
+    width: max-content; /* растягивается под содержимое */
+    min-width: 100%;    /* минимум — ширина контейнера */
     background: white;
 }
 
+td {
+    position: relative;
+}
+
+/* ===== Общие стили th и td ===== */
 th, td {
     border: 1px solid #ccc;
     padding: 10px 15px;
     text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+/* ===== Заголовки ===== */
 th {
     background-color: #e0e0e0;
     font-weight: bold;
+}
+
+/* ===== Контроль ширины столбцов ===== */
+th:nth-child(1), td:nth-child(1) { width: 300px; } /* первый столбец - отдел */
+th:nth-child(2), td:nth-child(2) { width: 200px; }
+th:nth-child(3), td:nth-child(3) { width: 200px; }
+th:nth-child(4), td:nth-child(4) { width: 200px; }
+th:nth-child(5), td:nth-child(5) { width: 200px; }
+th:nth-child(6), td:nth-child(6) { width: 100px; }
+
+/* Последний столбец — авто */
+th:nth-child(7), td:nth-child(7) {
+    min-width: 50px;
+    max-width: none;
+}
+
+/* ===== Кнопка раскрытия текста ===== */
+.expand-btn {
+    display: inline-block;
+    margin-left: 5px;
+    color: #0066cc;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+/* ===== Статус текста: свернутый / развернутый ===== */
+td.collapsed .text-content {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px; /* ширина колонки по умолчанию */
+    vertical-align: middle;
+}
+
+td.expanded .text-content {
+    display: block;
+    white-space: normal; /* перенос строк */
+    word-wrap: break-word;
+    word-break: break-word;
+    max-width: none;
+}
+
+td.expanded {
+    width: auto; /* td может расширяться */
 }
 
 /* ===== Формы внутри таблицы ===== */
