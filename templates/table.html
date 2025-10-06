@@ -15,15 +15,29 @@
             <tr>
                 <th>Отдел</th>
                 {% for metric in metrics %}
-                    {% if loop.first %}
-                        <th>{{ metric.name }} (ред.)</th>
-                    {% else %}
-                        <th>{{ metric.name }}</th>
-                    {% endif %}
+                    <th>{{ metric.name }}</th>
                 {% endfor %}
-                <th>Дата ред.</th>
+                <th>Дата</th>
                 <th>Действие</th>
             </tr>
+
+            {% if user.can_edit == 1 %}
+            <tr>
+                <td style="background-color: #e0e0e0;"></td> <!-- первый столбец -->
+                {% for metric in metrics %}
+                    <td {% if loop.index0 == 0 %}style="background-color: #e0e0e0;"{% endif %}>
+                        {% if not loop.first %}
+                        <form class="table-form" method="post" action="/delete_metric/{{ metric.id }}">
+                            <input type="hidden" name="page" value="{{ page }}">
+                            <input type="submit" value="Удалить" class="table-btn">
+                        </form>
+                        {% endif %}
+                    </td>
+                {% endfor %}
+                <td style="background-color: #e0e0e0;"></td> <!-- столбец с датой -->
+                <td style="background-color: #e0e0e0;"></td> <!-- столбец с действием -->
+            </tr>
+            {% endif %}
 
             {% for row in table_data %}
                 <tr>
@@ -89,7 +103,7 @@
         {% endif %}
     </div>
 
-    {% if user.can_edit == 1 %}
+    {% if user.id == 1 %}
     <div class="add-forms-container">
         <div class="add-department-form">
             <h3>Добавить отдел</h3>

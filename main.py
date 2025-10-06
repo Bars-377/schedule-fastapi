@@ -171,7 +171,7 @@ async def index(request: Request, page: int = 1, db: AsyncSession = Depends(get_
     end_page = min(page + 1, total_pages)
 
     # --- Получаем все метрики ---
-    metrics = (await db.execute(select(Metric))).scalars().all()
+    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
 
     # --- Получаем все branch_data ---
     branch_data_rows = (await db.execute(select(BranchData))).scalars().all()
@@ -233,7 +233,7 @@ async def add_branch(name: str = Form(...), db: AsyncSession = Depends(get_db), 
     await db.refresh(new_branch)  # важно, чтобы new_branch.id стал доступен
 
     # --- Создание пустых записей branch_data для всех метрик ---
-    metrics = (await db.execute(select(Metric))).scalars().all()
+    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     for metric in metrics:
         # проверяем, есть ли уже запись на сегодня
         result = await db.execute(
@@ -302,7 +302,7 @@ async def update_branch_data(
         await db.refresh(branch_data)
 
     # --- Создаём недостающие branch_data для новых метрик ---
-    metrics = (await db.execute(select(Metric))).scalars().all()
+    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     for metric in metrics:
         result = await db.execute(
             select(BranchData).where(
@@ -456,6 +456,25 @@ async def add_metric(
 
     await db.commit()
     return RedirectResponse(f"/?page={page}&msg=Метрика+добавлена", status_code=303)
+
+# --- Удаление метрики ---
+@app.post("/delete_metric/{metric_id}")
+async def delete_metric(
+    metric_id: int,
+    page: int = Form(1),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_edit_permission)
+):
+    metric = await db.get(Metric, metric_id)
+    if metric:
+        # Удаляем все данные branch_data для этой метрики
+        await db.execute(
+            BranchData.__table__.delete().where(BranchData.metric_id == metric_id)
+        )
+        # Удаляем саму метрику
+        await db.delete(metric)
+        await db.commit()
+    return RedirectResponse(f"/?page={page}&msg=Метрика+удалена", status_code=303)
 
 # --- Запуск сервера ---
 if __name__ == "__main__":
