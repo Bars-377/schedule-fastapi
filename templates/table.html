@@ -90,6 +90,7 @@
     </div>
 
     {% if user.can_edit == 1 %}
+    <div class="add-forms-container">
         <div class="add-department-form">
             <h3>Добавить отдел</h3>
             <form method="post" action="/add">
@@ -97,6 +98,15 @@
                 <input type="submit" value="Добавить">
             </form>
         </div>
+
+        <div class="add-department-form">
+            <h3>Добавить метрику</h3>
+            <form method="post" action="/add_metric">
+                <input type="text" name="name" placeholder="Название метрики" required>
+                <input type="submit" value="Добавить">
+            </form>
+        </div>
+    </div>
     {% endif %}
 </body>
 

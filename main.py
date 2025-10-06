@@ -261,7 +261,7 @@ async def add_branch(name: str = Form(...), db: AsyncSession = Depends(get_db), 
     last_page = (len(total_rows) + per_page - 1) // per_page
     last_page = last_page if last_page > 0 else 1
 
-    return RedirectResponse(f"/?page={last_page}", status_code=303)
+    return RedirectResponse(f"/?page={last_page}&msg=Отдел+добавлен", status_code=303)
 
 # --- Обновление данных филиала через BranchData ---
 @app.post("/update/{row_id}")
@@ -276,7 +276,7 @@ async def update_branch_data(
 ):
     today = date.today()
 
-    # Проверяем, есть ли запись на сегодня
+    # --- Обновляем или создаём текущую запись ---
     result = await db.execute(
         select(BranchData).where(
             BranchData.branch_id == branch_id,
@@ -290,7 +290,6 @@ async def update_branch_data(
         branch_data.value = Decimal(value)
         db.add(branch_data)
         await db.commit()
-        await recalc(branch_data, db)  # пересчет всех метрик только для сегодняшней даты
     else:
         branch_data = BranchData(
             branch_id=branch_id,
@@ -301,12 +300,31 @@ async def update_branch_data(
         db.add(branch_data)
         await db.commit()
         await db.refresh(branch_data)
-        await recalc(branch_data, db)
 
+    # --- Создаём недостающие branch_data для новых метрик ---
+    metrics = (await db.execute(select(Metric))).scalars().all()
+    for metric in metrics:
+        result = await db.execute(
+            select(BranchData).where(
+                BranchData.branch_id == branch_id,
+                BranchData.metric_id == metric.id,
+                BranchData.record_date == today
+            )
+        )
+        if not result.scalar_one_or_none():
+            new_bd = BranchData(
+                branch_id=branch_id,
+                metric_id=metric.id,
+                record_date=today,
+                value=0.0
+            )
+            db.add(new_bd)
     await db.commit()
-    await db.refresh(branch_data)  # важно, чтобы появился id для новых записей
 
-    # --- Передаем msg в URL для отображения ---
+    # --- Пересчёт всех метрик филиала ---
+    await recalc(branch_data, db)
+
+    await db.refresh(branch_data)
     return RedirectResponse(f"/?page={page}&msg=Сохранено", status_code=303)
 
 # --- Удаление филиала ---
@@ -394,6 +412,50 @@ async def auth_exception_handler(request: Request, exc: HTTPException):
     if exc.status_code == 401:
         return RedirectResponse(url="/login_form")
     return HTMLResponse(content=str(exc.detail), status_code=exc.status_code)
+
+# --- Обработка добавления новой метрики ---
+@app.post("/add_metric")
+async def add_metric(
+    name: str = Form(...), 
+    page: int = Form(1),  # получаем текущую страницу
+    db: AsyncSession = Depends(get_db), 
+    user=Depends(require_edit_permission)
+):
+    if not name.strip():
+        return RedirectResponse(f"/?page={page}&msg=Имя+метрики+не+может+быть+пустым", status_code=303)
+
+    # Проверяем существующую метрику
+    existing = await db.execute(select(Metric).where(Metric.name == name.strip()))
+    if existing.scalar_one_or_none():
+        return RedirectResponse(f"/?page={page}&msg=Метрика+с+таким+именем+уже+существует", status_code=303)
+
+    # Создание метрики
+    new_metric = Metric(name=name.strip())
+    db.add(new_metric)
+    await db.commit()
+    await db.refresh(new_metric)
+
+    # Создаем BranchData для всех филиалов на сегодня
+    branches = (await db.execute(select(Branche))).scalars().all()
+    for branch in branches:
+        existing_bd = (await db.execute(
+            select(BranchData).where(
+                BranchData.branch_id == branch.id,
+                BranchData.metric_id == new_metric.id,
+                BranchData.record_date == date.today()
+            )
+        )).scalars().first()
+        if not existing_bd:
+            new_bd = BranchData(
+                branch_id=branch.id,
+                metric_id=new_metric.id,
+                record_date=date.today(),
+                value=0.0
+            )
+            db.add(new_bd)
+
+    await db.commit()
+    return RedirectResponse(f"/?page={page}&msg=Метрика+добавлена", status_code=303)
 
 # --- Запуск сервера ---
 if __name__ == "__main__":
