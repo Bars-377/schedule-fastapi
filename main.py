@@ -138,19 +138,25 @@ async def recalc(branch_data: BranchData, db: AsyncSession):
     )
     latest_branch_data = result.scalars().all()
 
+    latest_branch_data[1].value = float(Decimal('16'))
+    latest_branch_data[4].value = float(Decimal('6'))
+    latest_branch_data[5].value = float(Decimal('2'))
+    latest_branch_data[6].value = float(Decimal('7.6'))
+    latest_branch_data[7].value = float(Decimal('72.2'))
+
     for i, bd in enumerate(latest_branch_data):
         if bd.id == branch_data.id:
             # Сам branch_data не трогаем
             continue
 
         # --- Формулы зависят от позиции bd в списке ---
-        if i == 1:
-            bd.value = float(Decimal(branch_data.value) * Decimal('2') + Decimal('5'))
-        elif i == 2:
-            bd.value = float(Decimal(branch_data.value) * Decimal('1.5') + Decimal('10'))
-        else:
-            # Для всех остальных
-            bd.value = float(Decimal(branch_data.value) * Decimal('2'))
+        if i == 2:
+            bd.value = float(Decimal(latest_branch_data[0].value) - Decimal(latest_branch_data[4].value) - Decimal(latest_branch_data[5].value) - Decimal(latest_branch_data[6].value))
+        elif i == 3:
+            bd.value = float(Decimal(latest_branch_data[2].value) * Decimal('100') / Decimal(latest_branch_data[0].value))
+        # else:
+        #     # Для всех остальных
+        #     bd.value = float(Decimal(latest_branch_data[0].value) * Decimal('2'))
 
         db.add(bd)
 

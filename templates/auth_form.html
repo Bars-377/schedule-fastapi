@@ -11,7 +11,7 @@
         <h2>{{ title }}</h2>
         <input type="text" name="username" placeholder="Имя пользователя" required>
         <input type="password" name="password" placeholder="Пароль" required>
-        <input type="submit" value="{{ submit_text }}">
+        <input class="table-btn" type="submit" value="{{ submit_text }}">
         {% if register_link %}
             <p>Нет аккаунта? <a href='/register_form'>Зарегистрироваться</a></p>
         {% endif %}

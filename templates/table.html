@@ -18,10 +18,10 @@
                     <th>{{ metric.name }}</th>
                 {% endfor %}
                 <th>Дата</th>
-                <th>Действие</th>
+                {% if user.id == 1 %}<th>Действие</th>{% endif %}
             </tr>
 
-            {% if user.can_edit == 1 %}
+            {% if user.id == 1 %}
             <tr>
                 <td style="background-color: #e0e0e0;"></td> <!-- первый столбец -->
                 {% for metric in metrics %}
@@ -68,16 +68,14 @@
                         {% endif %}
                     </td>
 
-                    <td>
-                        {% if user.can_edit == 1 %}
+                    {% if user.id == 1 %}
+                        <td>
                             <form class="table-form" method="post" action="/delete/{{ row.branch_id }}">
                                 <input type="hidden" name="page" value="{{ page }}">
                                 <input type="submit" value="Удалить" class="table-btn-del">
                             </form>
-                        {% else %}
-                            Нет прав
-                        {% endif %}
-                    </td>
+                        </td>
+                    {% endif %}
                 </tr>
             {% endfor %}
         </table>
