@@ -162,7 +162,7 @@ async def index(request: Request, page: int = 1, db: AsyncSession = Depends(get_
     per_page = 5  # количество филиалов на страницу
 
     # --- Получаем все филиалы с пагинацией ---
-    result = await db.execute(select(Branche).offset((page - 1) * per_page).limit(per_page))
+    result = await db.execute(select(Branche).order_by(Branche.id).offset((page - 1) * per_page).limit(per_page))
     branches = result.scalars().all()
 
     total_branches = (await db.execute(select(Branche))).scalars().all()
@@ -347,7 +347,7 @@ async def delete_branch(row_id: int, page: int = Form(1), db: AsyncSession = Dep
     if page > total_pages:
         page = total_pages if total_pages > 0 else 1
 
-    return RedirectResponse(f"/?page={page}", status_code=303)
+    return RedirectResponse(f"/?page={page}&msg=Удалено", status_code=303)
 
 @app.get("/register_form", response_class=HTMLResponse)
 async def register_form(request: Request):
@@ -436,7 +436,7 @@ async def add_metric(
     await db.refresh(new_metric)
 
     # Создаем BranchData для всех филиалов на сегодня
-    branches = (await db.execute(select(Branche))).scalars().all()
+    branches = (await db.execute(select(Branche).order_by(Branche.id))).scalars().all()
     for branch in branches:
         existing_bd = (await db.execute(
             select(BranchData).where(

@@ -13,7 +13,7 @@
     <div class="table-container">
         <table>
             <tr>
-                <th>Отдел</th>
+                <th>Отдел ОГКУ "ТО МФЦ"</th>
                 {% for metric in metrics %}
                     <th>{{ metric.name }}</th>
                 {% endfor %}
@@ -29,7 +29,7 @@
                         {% if not loop.first %}
                         <form class="table-form" method="post" action="/delete_metric/{{ metric.id }}">
                             <input type="hidden" name="page" value="{{ page }}">
-                            <input type="submit" value="Удалить" class="table-btn">
+                            <input type="submit" value="Удалить" class="table-btn-del">
                         </form>
                         {% endif %}
                     </td>
@@ -51,7 +51,7 @@
                                     <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
                                     <input type="hidden" name="page" value="{{ page }}">
                                     <br>
-                                    <input type="submit" value="Сохранить">
+                                    <input type="submit" value="Сохранить" class="table-btn">
                                 </form>
                             </td>
                         {% else %}
@@ -72,7 +72,7 @@
                         {% if user.can_edit == 1 %}
                             <form class="table-form" method="post" action="/delete/{{ row.branch_id }}">
                                 <input type="hidden" name="page" value="{{ page }}">
-                                <input type="submit" value="Удалить">
+                                <input type="submit" value="Удалить" class="table-btn-del">
                             </form>
                         {% else %}
                             Нет прав
@@ -109,7 +109,7 @@
             <h3>Добавить отдел</h3>
             <form method="post" action="/add">
                 <input type="text" name="name" placeholder="Название отдела" required>
-                <input type="submit" value="Добавить">
+                <input type="submit" value="Добавить" class="table-btn">
             </form>
         </div>
 
@@ -117,7 +117,7 @@
             <h3>Добавить метрику</h3>
             <form method="post" action="/add_metric">
                 <input type="text" name="name" placeholder="Название метрики" required>
-                <input type="submit" value="Добавить">
+                <input type="submit" value="Добавить" class="table-btn">
             </form>
         </div>
     </div>

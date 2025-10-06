@@ -1,10 +1,31 @@
+/* ===== CSS-переменные для кастомизации ===== */
+:root {
+    --primary-color: #0066cc;
+    --primary-hover: #004999;
+    --danger-color: #cc0000;
+    --danger-hover: #990000;
+    --bg-light: #f5f5f5;
+    --bg-white: #fff;
+    --bg-table-header: #e0e0e0;
+    --text-color: #333;
+    --border-radius: 10px;
+    --box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    --transition-speed: 0.3s;
+    --td-max-width: 150px; /* ширина для свернутого текста */
+}
+
 /* ===== Общие стили ===== */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
 body {
     font-family: Arial, sans-serif;
     padding: 30px;
-    background-color: #f5f5f5;
-    color: #333;
-    margin: 0;
+    background-color: var(--bg-light);
+    color: var(--text-color);
 }
 
 h2, h3, p {
@@ -13,7 +34,7 @@ h2, h3, p {
 }
 
 a {
-    color: #0066cc;
+    color: var(--primary-color);
     text-decoration: none;
 }
 
@@ -26,128 +47,118 @@ a:hover {
     font-weight: bold;
 }
 
-/* ===== Центрирование форм ===== */
-.centered-form-body {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
+/* ===== Универсальные кнопки ===== */
+.button, .table-btn, .table-btn-del {
+    padding: 8px 20px;
+    border: none;
+    border-radius: var(--border-radius);
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color var(--transition-speed) ease;
 }
 
-/* ===== Основные формы (авторизация, регистрация, добавление отдела) ===== */
-form:not(.table-form) {
-    background: #fff;
+.table-btn {
+    background-color: var(--primary-color);
+    color: #fff;
+}
+
+.table-btn:hover {
+    background-color: var(--primary-hover);
+}
+
+.table-btn-del {
+    background-color: var(--danger-color);
+    color: #fff;
+}
+
+.table-btn-del:hover {
+    background-color: var(--danger-hover);
+}
+
+/* ===== Формы ===== */
+form {
+    background: var(--bg-white);
     padding: 25px 30px;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
     text-align: center;
     width: 100%;
     max-width: 400px;
+    margin: 10px auto;
 }
 
-input[type="text"], input[type="password"], input[type="number"] {
+form input[type="text"],
+form input[type="password"],
+form input[type="number"] {
     width: 100%;
     padding: 8px 10px;
     margin: 10px 0;
-    box-sizing: border-box;
     border: 1px solid #ccc;
     border-radius: 5px;
 }
 
 input[type="submit"] {
-    padding: 8px 20px;
-    cursor: pointer;
-    border: none;
-    border-radius: 5px;
-    background-color: #0066cc;
-    color: white;
-    font-weight: bold;
-    transition: background-color 0.2s ease;
-    margin-bottom: 10px; /* отступ только снизу */
+    margin-top: 10px;
 }
 
-input[type="submit"]:hover {
-    background-color: #004999;
-}
-
-/* ===== Таблицы ===== */
+/* ===== Контейнер таблицы ===== */
 .table-container {
     width: 100%;
     overflow-x: auto;
     margin: 20px 0;
 }
 
-.table-container table {
+table {
     border-collapse: collapse;
-    table-layout: auto; /* подстраивается под содержимое */
-    width: max-content; /* растягивается под содержимое */
-    min-width: 100%;    /* минимум — ширина контейнера */
-    background: white;
+    width: 100%;
+    background: var(--bg-white);
+    table-layout: auto; /* автоматически подстраиваем под содержимое */
+    min-width: 600px; /* минимум для маленьких таблиц */
 }
 
-td {
-    position: relative;
-}
-
-/* ===== Общие стили th и td ===== */
 th, td {
     border: 1px solid #ccc;
     padding: 10px 15px;
     text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-wrap: break-word;
+    vertical-align: middle;
 }
 
 /* ===== Заголовки ===== */
 th {
-    background-color: #e0e0e0;
+    background-color: var(--bg-table-header);
     font-weight: bold;
 }
 
-/* ===== Контроль ширины столбцов ===== */
-th:nth-child(1), td:nth-child(1) { width: 200px; } /* первый столбец - отдел */
-th:nth-child(2), td:nth-child(2) { width: 50px; }
-th:nth-child(3), td:nth-child(3) { width: 50px; }
-th:nth-child(4), td:nth-child(4) { width: 50px; }
-th:nth-child(5), td:nth-child(5) { width: 50px; }
-th:nth-child(6), td:nth-child(6) { width: 100px; }
-
-/* Последний столбец — авто */
-th:nth-child(7), td:nth-child(7) {
-    min-width: 50px;
+/* ===== Динамическая ширина столбцов ===== */
+th, td {
     max-width: none;
+}
+
+/* ===== Текст с возможностью скрытия/раскрытия ===== */
+td .text-content {
+    display: block;
+    max-width: var(--td-max-width);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ===== Раскрытый текст ===== */
+td.expanded .text-content {
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
 }
 
 /* ===== Кнопка раскрытия текста ===== */
 .expand-btn {
-    display: inline-block;
-    margin-left: 5px;
-    color: #0066cc;
+    display: block;
+    margin-top: 5px;
+    color: var(--primary-color);
     cursor: pointer;
     font-size: 0.9em;
-}
-
-/* ===== Статус текста: свернутый / развернутый ===== */
-td.collapsed .text-content {
-    display: inline-block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 150px; /* ширина колонки по умолчанию */
-    vertical-align: middle;
-}
-
-td.expanded .text-content {
-    display: block;
-    white-space: normal; /* перенос строк */
-    word-wrap: break-word;
-    word-break: break-word;
-    max-width: none;
-}
-
-td.expanded {
-    width: auto; /* td может расширяться */
+    user-select: none;
 }
 
 /* ===== Формы внутри таблицы ===== */
@@ -156,8 +167,6 @@ td form {
     padding: 0;
     background: none;
     box-shadow: none;
-    width: auto;
-    text-align: center;
 }
 
 td input[type="number"] {
@@ -170,15 +179,22 @@ td input[type="submit"] {
     font-size: 0.9em;
 }
 
-/* ===== Форма добавления отдела ===== */
+/* ===== Контейнер добавления отделов/метрик ===== */
+.add-forms-container {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 20px 0;
+}
+
 .add-department-form {
-    margin: 20px auto;
-    padding: 20px;
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    width: 100%;
+    flex: 1 1 300px;
     max-width: 500px;
+    padding: 20px;
+    background: var(--bg-white);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
     text-align: center;
 }
 
@@ -193,9 +209,9 @@ td input[type="submit"] {
     justify-content: center;
     gap: 5px;
     padding: 15px;
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    background: var(--bg-white);
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
     margin-top: 20px;
 }
 
@@ -203,32 +219,62 @@ td input[type="submit"] {
     font-weight: bold;
     padding: 5px 10px;
     border-radius: 5px;
-    color: #0066cc;
+    color: var(--primary-color);
     text-decoration: none;
-    transition: background-color 0.2s ease;
+    transition: background-color var(--transition-speed) ease;
 }
 
 .pagination-form a:hover {
-    background-color: #e0e0e0;
+    background-color: var(--bg-table-header);
 }
 
 .pagination-form strong {
     padding: 5px 10px;
     border-radius: 5px;
-    background-color: #0066cc;
+    background-color: var(--primary-color);
+    color: #fff;
+}
+
+/* ===== Overlay и сообщение ===== */
+#overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 9998;
+}
+
+#save-msg {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 128, 0, 0.9);
     color: white;
+    padding: 20px 40px;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: var(--border-radius);
+    z-index: 9999;
+    box-shadow: 0 0 10px #000;
 }
 
-.add-forms-container {
-    display: flex;
-    justify-content: center;
-    gap: 20px; /* расстояние между формами */
-    flex-wrap: wrap; /* чтобы на узких экранах формы переносились */
-    margin: 20px 0;
-}
+/* ===== Адаптивность ===== */
+@media (max-width: 768px) {
+    .add-forms-container {
+        flex-direction: column;
+        gap: 15px;
+    }
 
-.add-forms-container .add-department-form {
-    flex: 1 1 300px; /* минимальная ширина 300px, может расширяться */
-    max-width: 500px;
-    margin: 0; /* убираем авто-центровку */
+    table {
+        font-size: 14px;
+    }
+
+    td .text-content {
+        max-width: 100px;
+    }
 }
