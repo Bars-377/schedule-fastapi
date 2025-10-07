@@ -28,6 +28,16 @@
 
       python -m pip install -r requirements.txt
 
-PowerShell
+PowerShell:
 
       python -m pip freeze | ForEach-Object { python -m pip uninstall -y $_ }
+
+PEP 8:
+
+      python -m pip install -r dev-requirements.txt
+
+      pre-commit autoupdate
+      pre-commit uninstall
+      pre-commit install
+
+      pre-commit run --all-files
