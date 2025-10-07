@@ -188,12 +188,12 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
     latest_branchdata[6].value = float(Decimal("7.6"))
     latest_branchdata[7].value = float(Decimal("72.2"))
 
-    for i, bd in enumerate(latest_branchdata):
-        if bd.id == BranchData.id:
-            # Сам branchdata не трогаем
-            continue
+    if latest_branchdata[0].value != 0:
+        for i, bd in enumerate(latest_branchdata):
+            if bd.id == BranchData.id:
+                # Сам branchdata не трогаем
+                continue
 
-        if latest_branchdata[0].value != 0:
             # --- Формулы зависят от позиции bd в списке ---
             if i == 2:
                 bd.value = float(
@@ -213,7 +213,10 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
             #     bd.value = float(Decimal(latest_branchdata[0].value) \
             #          * Decimal('2'))
 
-        db.add(bd)
+            db.add(bd)
+    else:
+        for i, bd in enumerate(latest_branchdata):
+            bd.value = float(Decimal("0"))
 
     await db.commit()
 
@@ -362,13 +365,20 @@ async def add_branch(
 @app.post("/update/{row_id}")
 async def update_branchdata(
     row_id: str,  # строка, чтобы поймать 'new'
-    value: float = Form(...),
+    value: str = Form("0"),  # принимаем строку, по умолчанию "0"
     branch_id: int = Form(...),
     metric_id: int = Form(...),
     page: int = Form(1),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_edit_permission),
 ):
+
+    # Преобразуем в float, пустая строка → 0
+    try:
+        value = float(value)
+    except ValueError:
+        value = 0
+
     today = date.today()
 
     # --- Обновляем или создаём текущую запись ---
@@ -382,7 +392,7 @@ async def update_branchdata(
     branchdata = result.scalar_one_or_none()
 
     if branchdata:
-        BranchData.value = Decimal(value)
+        branchdata.value = Decimal(value)
         db.add(branchdata)
         await db.commit()
     else:
