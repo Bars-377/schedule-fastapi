@@ -98,11 +98,11 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
 
     # print(latest_branchdata)
 
-    latest_branchdata[1].value = float(Decimal("16"))
-    latest_branchdata[4].value = float(Decimal("6"))
-    latest_branchdata[5].value = float(Decimal("2"))
-    # latest_branchdata[6].value = float(Decimal("7.6"))
-    latest_branchdata[7].value = float(Decimal("72.2"))
+    # latest_branchdata[1].value = float(Decimal("16"))
+    # latest_branchdata[4].value = float(Decimal("6"))
+    # latest_branchdata[5].value = float(Decimal("2"))
+    # # latest_branchdata[6].value = float(Decimal("7.6"))
+    # latest_branchdata[7].value = float(Decimal("72.2"))
 
     for i, bd in enumerate(latest_branchdata):
         if bd.id == branchdata.id:
