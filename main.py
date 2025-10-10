@@ -1,108 +1,21 @@
 import asyncio
-import json
 import re
-from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
-from sqlalchemy import Column, Integer, UniqueConstraint
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-from sqlmodel import Field, SQLModel, select
+from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 from starlette.middleware.sessions import SessionMiddleware
 
-# --- Чтение конфигурации ---
-with open("config.json", "r") as f:
-    config = json.load(f)
-
-# --- БД ---
-DB_USER = config["DB_USER"]
-DB_PASSWORD = config["DB_PASSWORD"]
-DB_HOST = config["DB_HOST"]
-DB_NAME = config["DB_NAME"]
-
-DATABASE_URL = (
-    f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
-)
-engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = sessionmaker(
-    bind=engine, class_=AsyncSession, expire_on_commit=False
-)
-
-
-# --- Модели ---
-class User(SQLModel, table=True):
-    __tablename__ = "users"
-    __table_args__ = {"extend_existing": True}
-
-    id: Optional[int] = Field(
-        default=None,
-        sa_column=Column(Integer, primary_key=True, autoincrement=True),
-    )
-    username: str = Field(default="")
-    hashed_password: str = Field(default="")
-    can_edit: int = Field(default=0)
-
-
-class Branche(SQLModel, table=True):
-    __tablename__ = "branches"
-    __table_args__ = {"extend_existing": True}
-
-    id: Optional[int] = Field(
-        default=None,
-        sa_column=Column(Integer, primary_key=True, autoincrement=True),
-    )
-    name: str = Field(default="")
-
-
-class Metric(SQLModel, table=True):
-    __tablename__ = "metrics"
-    __table_args__ = {"extend_existing": True}
-
-    id: Optional[int] = Field(
-        default=None,
-        sa_column=Column(Integer, primary_key=True, autoincrement=True),
-    )
-    name: str = Field(default="")
-
-
-class BranchData(SQLModel, table=True):
-    __tablename__ = "branchdata"
-    __table_args__ = (
-        UniqueConstraint(
-            "branch_id",
-            "metric_id",
-            "record_date",
-            name="branch_metric_date_unique",
-        ),
-    )
-    __table_args__ = {"extend_existing": True}
-
-    id: Optional[int] = Field(
-        default=None,
-        sa_column=Column(Integer, primary_key=True, autoincrement=True),
-    )
-    branch_id: int = Field(default=0)
-    metric_id: int = Field(default=0)
-    record_date: date = Field(default_factory=date.today)
-    value: float = Field(default=0.0)
-
-
-# --- FastAPI с lifespan ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    yield
-    await engine.dispose()
-
+from lifespan_manager import lifespan
+from models import AsyncSessionLocal, BranchData, Branche, Metric, User
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key="supersecretkey")
@@ -169,54 +82,53 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
     Пересчет всех метрик филиала для последней даты на основе
     BranchData.value, но сам branchdata не меняется.
     """
-    today = date.today()
 
     # Получаем все branchdata для этого филиала с последней датой
     result = await db.execute(
         select(BranchData)
         .where(
-            BranchData.branch_id == BranchData.branch_id,
-            BranchData.record_date == today,
+            BranchData.branch_id == branchdata.branch_id,
+            BranchData.record_date == branchdata.record_date,
         )
-        .order_by(BranchData.id)  # сортировка по id
+        .order_by(BranchData.metric_id)  # сортировка по id
     )
     latest_branchdata = result.scalars().all()
+
+    print(latest_branchdata)
 
     latest_branchdata[1].value = float(Decimal("16"))
     latest_branchdata[4].value = float(Decimal("6"))
     latest_branchdata[5].value = float(Decimal("2"))
-    latest_branchdata[6].value = float(Decimal("7.6"))
+    # latest_branchdata[6].value = float(Decimal("7.6"))
     latest_branchdata[7].value = float(Decimal("72.2"))
 
-    if latest_branchdata[0].value != 0:
-        for i, bd in enumerate(latest_branchdata):
-            if bd.id == BranchData.id:
-                # Сам branchdata не трогаем
-                continue
+    for i, bd in enumerate(latest_branchdata):
+        if bd.id == branchdata.id:
+            # Сам branchdata не трогаем
+            continue
 
-            # --- Формулы зависят от позиции bd в списке ---
-            if i == 2:
-                bd.value = float(
-                    Decimal(latest_branchdata[0].value)
-                    - Decimal(latest_branchdata[4].value)
-                    - Decimal(latest_branchdata[5].value)
-                    - Decimal(latest_branchdata[6].value)
-                )
-            elif i == 3:
-                bd.value = float(
-                    Decimal(latest_branchdata[2].value)
-                    * Decimal("100")
-                    / Decimal(latest_branchdata[0].value)
-                )
-            # else:
-            #     # Для всех остальных
-            #     bd.value = float(Decimal(latest_branchdata[0].value) \
-            #          * Decimal('2'))
-
-            db.add(bd)
-    else:
-        for i, bd in enumerate(latest_branchdata):
+        # --- Формулы зависят от позиции bd в списке ---
+        if i == 2:
+            bd.value = float(
+                Decimal(latest_branchdata[0].value)
+                - Decimal(latest_branchdata[4].value)
+                - Decimal(latest_branchdata[5].value)
+                - Decimal(latest_branchdata[6].value)
+            )
+        elif i == 3 and latest_branchdata[0].value != 0:
+            bd.value = float(
+                Decimal(latest_branchdata[2].value)
+                * Decimal("100")
+                / Decimal(latest_branchdata[0].value)
+            )
+        # else:
+        #     # Для всех остальных
+        #     bd.value = float(Decimal(latest_branchdata[0].value) \
+        #          * Decimal('2'))
+        elif i != 6:
             bd.value = float(Decimal("0"))
+
+        db.add(bd)
 
     await db.commit()
 
@@ -291,6 +203,13 @@ async def index(
                 }
         table_data.append(row)
 
+    # Находим самую актуальную дату среди всех branchdata
+    latest_date = None
+    for bd in branchdata_rows:
+        if bd.record_date:
+            if latest_date is None or bd.record_date > latest_date:
+                latest_date = bd.record_date
+
     return templates.TemplateResponse(
         "table.html",
         {
@@ -303,6 +222,7 @@ async def index(
             "start_page": start_page,
             "end_page": end_page,
             "msg": msg,
+            "latest_date": latest_date,
         },
     )
 
@@ -319,32 +239,30 @@ async def add_branch(
             "<h3>Имя филиала не может быть пустым</h3><a href='/'>Назад</a>"
         )
 
-    # Создание филиала
     new_branch = Branche(name=name.strip())
     db.add(new_branch)
     await db.commit()
-    await db.refresh(new_branch)  # важно, чтобы new_branch.id стал доступен
+    await db.refresh(new_branch)
 
-    # --- Создание пустых записей branchdata для всех метрик ---
+    # --- Создание пустых записей branchdata для всех метрик на последнюю дату ---
     metrics = (
         (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     )
     for metric in metrics:
-        # проверяем, есть ли уже запись на сегодня
+        last_date_metric = await get_last_date(db, new_branch.id, metric.id)
         result = await db.execute(
             select(BranchData).where(
                 BranchData.branch_id == new_branch.id,
                 BranchData.metric_id == metric.id,
-                BranchData.record_date == date.today(),
+                BranchData.record_date == last_date_metric,
             )
         )
-        existing = result.scalar_one_or_none()
-        if not existing:
+        if not result.scalar_one_or_none():
             new_bd = BranchData(
                 branch_id=new_branch.id,
                 metric_id=metric.id,
-                record_date=date.today(),
-                value=0.0,  # или можно оставить пустое значение
+                record_date=last_date_metric,
+                value=0.0,
             )
             db.add(new_bd)
 
@@ -361,11 +279,36 @@ async def add_branch(
     )
 
 
+# --- Получение последней даты branchdata для ветки и метрики ---
+async def get_last_date(db: AsyncSession, branch_id: int, metric_id: int):
+    result = await db.execute(
+        select(func.max(BranchData.record_date)).where(
+            BranchData.branch_id == branch_id,
+            BranchData.metric_id == metric_id,
+        )
+    )
+    last_date = result.scalar_one_or_none()
+    return last_date or date.today()
+
+
+def parse_number(value: str) -> float:
+    if not value:
+        return 0.0
+    # Убираем пробелы
+    value = value.strip()
+    # Заменяем запятую на точку
+    value = value.replace(",", ".")
+    # Проверяем, есть ли число с помощью регулярки
+    if re.fullmatch(r"[+-]?(\d+(\.\d*)?|\.\d+)", value):
+        return float(value)
+    return 0.0
+
+
 # --- Обновление данных филиала через branchdata ---
 @app.post("/update/{row_id}")
 async def update_branchdata(
-    row_id: str,  # строка, чтобы поймать 'new'
-    value: str = Form("0"),  # принимаем строку, по умолчанию "0"
+    row_id: str,
+    value: str = Form("0"),
     branch_id: int = Form(...),
     metric_id: int = Form(...),
     page: int = Form(1),
@@ -373,20 +316,17 @@ async def update_branchdata(
     user=Depends(require_edit_permission),
 ):
 
-    # Преобразуем в float, пустая строка → 0
-    try:
-        value = float(value)
-    except ValueError:
-        value = 0
+    # Использование:
+    value = parse_number(value)
 
-    today = date.today()
+    last_date = await get_last_date(db, branch_id, metric_id)
 
     # --- Обновляем или создаём текущую запись ---
     result = await db.execute(
         select(BranchData).where(
             BranchData.branch_id == branch_id,
             BranchData.metric_id == metric_id,
-            BranchData.record_date == today,
+            BranchData.record_date == last_date,
         )
     )
     branchdata = result.scalar_one_or_none()
@@ -399,30 +339,31 @@ async def update_branchdata(
         branchdata = BranchData(
             branch_id=branch_id,
             metric_id=metric_id,
-            record_date=today,
+            record_date=last_date,
             value=Decimal(value),
         )
         db.add(branchdata)
         await db.commit()
         await db.refresh(branchdata)
 
-    # --- Создаём недостающие branchdata для новых метрик ---
+    # --- Создаём недостающие branchdata для новых метрик на последнюю дату ---
     metrics = (
         (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     )
     for metric in metrics:
+        last_date_metric = await get_last_date(db, branch_id, metric.id)
         result = await db.execute(
             select(BranchData).where(
                 BranchData.branch_id == branch_id,
                 BranchData.metric_id == metric.id,
-                BranchData.record_date == today,
+                BranchData.record_date == last_date_metric,
             )
         )
         if not result.scalar_one_or_none():
             new_bd = BranchData(
                 branch_id=branch_id,
                 metric_id=metric.id,
-                record_date=today,
+                record_date=last_date_metric,
                 value=0.0,
             )
             db.add(new_bd)
@@ -570,11 +511,11 @@ async def auth_exception_handler(request: Request, exc: HTTPException):
     return HTMLResponse(content=str(exc.detail), status_code=exc.status_code)
 
 
-# --- Обработка добавления новой метрики ---
+# --- Добавление новой метрики ---
 @app.post("/add_metric")
 async def add_metric(
     name: str = Form(...),
-    page: int = Form(1),  # получаем текущую страницу
+    page: int = Form(1),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_edit_permission),
 ):
@@ -584,7 +525,6 @@ async def add_metric(
             status_code=303,
         )
 
-    # Проверяем существующую метрику
     existing = await db.execute(
         select(Metric).where(Metric.name == name.strip())
     )
@@ -594,37 +534,31 @@ async def add_metric(
             status_code=303,
         )
 
-    # Создание метрики
     new_metric = Metric(name=name.strip())
     db.add(new_metric)
     await db.commit()
     await db.refresh(new_metric)
 
-    # Создаем branchdata для всех филиалов на сегодня
+    # Создаем branchdata для всех филиалов на последнюю дату
     branches = (
         (await db.execute(select(Branche).order_by(Branche.id)))
         .scalars()
         .all()
     )
     for branch in branches:
-        existing_bd = (
-            (
-                await db.execute(
-                    select(BranchData).where(
-                        BranchData.branch_id == branch.id,
-                        BranchData.metric_id == new_metric.id,
-                        BranchData.record_date == date.today(),
-                    )
-                )
+        last_date_branch = await get_last_date(db, branch.id, new_metric.id)
+        result = await db.execute(
+            select(BranchData).where(
+                BranchData.branch_id == branch.id,
+                BranchData.metric_id == new_metric.id,
+                BranchData.record_date == last_date_branch,
             )
-            .scalars()
-            .first()
         )
-        if not existing_bd:
+        if not result.scalar_one_or_none():
             new_bd = BranchData(
                 branch_id=branch.id,
                 metric_id=new_metric.id,
-                record_date=date.today(),
+                record_date=last_date_branch,
                 value=0.0,
             )
             db.add(new_bd)

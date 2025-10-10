@@ -1,13 +1,15 @@
 CREATE TABLE "branches" (
 	"id" SERIAL NOT NULL,
 	"name" VARCHAR(255) NULL DEFAULT NULL::character varying,
+	"department_id" INTEGER NULL DEFAULT NULL,
 	PRIMARY KEY ("id")
 )
 ;
 COMMENT ON COLUMN "branches"."id" IS '';
 COMMENT ON COLUMN "branches"."name" IS '';
+COMMENT ON COLUMN "branches"."department_id" IS '';
 
-CREATE TABLE "branch_data" (
+CREATE TABLE "branchdata" (
 	"id" SERIAL NOT NULL,
 	"branch_id" INTEGER NULL DEFAULT NULL,
 	"metric_id" INTEGER NULL DEFAULT NULL,
@@ -17,11 +19,11 @@ CREATE TABLE "branch_data" (
 	CONSTRAINT branch_metric_date_unique UNIQUE (branch_id, metric_id, record_date)
 )
 ;
-COMMENT ON COLUMN "branch_data"."id" IS '';
-COMMENT ON COLUMN "branch_data"."branch_id" IS '';
-COMMENT ON COLUMN "branch_data"."metric_id" IS '';
-COMMENT ON COLUMN "branch_data"."record_date" IS '';
-COMMENT ON COLUMN "branch_data"."value" IS '';
+COMMENT ON COLUMN "branchdata"."id" IS '';
+COMMENT ON COLUMN "branchdata"."branch_id" IS '';
+COMMENT ON COLUMN "branchdata"."metric_id" IS '';
+COMMENT ON COLUMN "branchdata"."record_date" IS '';
+COMMENT ON COLUMN "branchdata"."value" IS '';
 
 CREATE TABLE "metrics" (
 	"id" SERIAL NOT NULL,

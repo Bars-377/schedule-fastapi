@@ -12,20 +12,32 @@
 
     <div class="table-container">
         <table>
+            <!-- Первая строка: заголовок таблицы -->
             <tr>
                 <th>Отдел ОГКУ "ТО МФЦ"</th>
                 {% for metric in metrics %}
                     <th>{{ metric.name }}</th>
                 {% endfor %}
-                <th>Дата</th>
                 {% if user.id == 1 %}<th>Действие</th>{% endif %}
             </tr>
 
+            <!-- Вторая строка: дата поверх всех метрик -->
+            <tr>
+                <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
+                <td colspan="{{ metrics|length }}">
+                    {{ latest_date or '-' }}
+                </td>
+                {% if user.id == 1 %}
+                    <td style="background-color: #e0e0e0;"></td>
+                {% endif %}
+            </tr>
+
+            <!-- Третья строка: кнопки удаления метрик (только для admin) -->
             {% if user.id == 1 %}
             <tr>
-                <td style="background-color: #e0e0e0;"></td> <!-- первый столбец -->
+                <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
                 {% for metric in metrics %}
-                    <td {% if loop.index0 == 0 %}style="background-color: #e0e0e0;"{% endif %}>
+                    <td>
                         {% if not loop.first %}
                         <form class="table-form" method="post" action="/delete_metric/{{ metric.id }}">
                             <input type="hidden" name="page" value="{{ page }}">
@@ -34,16 +46,16 @@
                         {% endif %}
                     </td>
                 {% endfor %}
-                <td style="background-color: #e0e0e0;"></td> <!-- столбец с датой -->
-                <td style="background-color: #e0e0e0;"></td> <!-- столбец с действием -->
+                <td style="background-color: #e0e0e0;"></td> <!-- пустой столбец для действия -->
             </tr>
             {% endif %}
 
+            <!-- Далее идут строки с данными -->
             {% for row in table_data %}
                 <tr>
                     <td>{{ row.branch_name }}</td>
                     {% for metric_name, metric_data in row.metrics.items() %}
-                        {% if user.can_edit == 1 and loop.index0 == 0 %}
+                        {% if user.can_edit == 1 and (loop.index0 == 0 or loop.index0 == 6) %}
                             <td>
                                 <form class="table-form" method="post" action="/update/{{ metric_data.id }}">
                                     <input type="number" name="value" step="any" value="{{ metric_data.value }}">
@@ -59,15 +71,6 @@
                         {% endif %}
                     {% endfor %}
 
-                    <td>
-                        {% set first_metric = row.metrics|dictsort|first %}
-                        {% if first_metric %}
-                            {{ first_metric[1].record_date or '-' }}
-                        {% else %}
-                            -
-                        {% endif %}
-                    </td>
-
                     {% if user.id == 1 %}
                         <td>
                             <form class="table-form" method="post" action="/delete/{{ row.branch_id }}">
@@ -81,6 +84,7 @@
         </table>
     </div>
 
+    <!-- Пагинация -->
     <div class="pagination-form">
         {% if start_page > 1 %}
             <a href='/?page=1'>1</a>
@@ -101,6 +105,7 @@
         {% endif %}
     </div>
 
+    <!-- Добавление отделов и метрик -->
     {% if user.id == 1 %}
     <div class="add-forms-container">
         <div class="add-department-form">
@@ -122,7 +127,7 @@
     {% endif %}
 </body>
 
-<!-- Добавляем этот div прямо перед </body> -->
+<!-- Оверлей и сообщение сохранения -->
 <div id="overlay" style="
     display: none;
     position: fixed;
