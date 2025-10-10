@@ -1,6 +1,5 @@
 import json
 from datetime import date
-from typing import Optional
 
 from sqlalchemy import Column, Integer, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -8,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import Field, SQLModel
 
 # --- Чтение конфигурации ---
-with open("config.json", "r") as f:
+with open("config.json") as f:
     config = json.load(f)
 
 # --- БД ---
@@ -32,7 +31,7 @@ class User(SQLModel, table=True):
     __tablename__ = "users"
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(
+    id: int | None = Field(
         default=None,
         sa_column=Column(Integer, primary_key=True, autoincrement=True),
     )
@@ -45,7 +44,7 @@ class Branche(SQLModel, table=True):
     __tablename__ = "branches"
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(
+    id: int | None = Field(
         default=None,
         sa_column=Column(Integer, primary_key=True, autoincrement=True),
     )
@@ -60,7 +59,7 @@ class Metric(SQLModel, table=True):
     __tablename__ = "metrics"
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(
+    id: int | None = Field(
         default=None,
         sa_column=Column(Integer, primary_key=True, autoincrement=True),
     )
@@ -79,7 +78,7 @@ class BranchData(SQLModel, table=True):
     )
     __table_args__ = {"extend_existing": True}
 
-    id: Optional[int] = Field(
+    id: int | None = Field(
         default=None,
         sa_column=Column(Integer, primary_key=True, autoincrement=True),
     )

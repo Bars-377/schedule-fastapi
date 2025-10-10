@@ -1,8 +1,35 @@
-[tool.black]
-line-length = 79
-target-version = ['py311']
-skip-string-normalization = false
+[tool.ruff]
+# Основные настройки
+line-length = 88
+indent-width = 4
+target-version = "py312"
 
-[tool.isort]
-profile = "black"
-line_length = 79
+# Все поддерживаемые категории Ruff
+select = [
+    "A",   # flake8-builtins, проверка на встроенные имена
+    "B",   # bugbear, потенциальные баги и ошибки
+    "C",   # mccabe, проверка сложности кода
+    "E",   # pycodestyle (PEP8)
+    "F",   # pyflakes, ошибки синтаксиса
+    "I",   # isort, сортировка импортов
+    "N",   # naming, snake_case и др.
+    "Q",   # flake8-quotes, проверка кавычек
+    "R",   # ruff-specific rules, собственные правила Ruff
+    "S",   # security, потенциальные уязвимости
+    "T",   # typing, проверки аннотаций типов
+    "UP",  # pyupgrade, обновление синтаксиса
+    "W"    # предупреждения PEP8
+]
+
+# Игнорируемые проверки
+ignore = [
+    "E501",  # длинные строки
+    "B008",  # Depends() в FastAPI разрешено
+    "S104",  # добавляем игнорирование binding to all interfaces
+]
+
+# Проверяемые файлы и каталоги
+src = ["main.py"]
+
+# Файлы и каталоги, которые нужно исключить
+exclude = ["main copy.py"]

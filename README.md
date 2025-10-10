@@ -32,7 +32,7 @@ PowerShell:
 
       python -m pip freeze | ForEach-Object { python -m pip uninstall -y $_ }
 
-PEP 8:
+ruff:
 
       python -m pip install -r dev-requirements.txt
 
@@ -41,3 +41,5 @@ PEP 8:
       pre-commit install
 
       pre-commit run --all-files
+
+      ruff check . --fix

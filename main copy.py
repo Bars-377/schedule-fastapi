@@ -1,5 +1,4 @@
 import asyncio
-import os
 import re
 from datetime import date
 from decimal import Decimal
@@ -18,6 +17,7 @@ from sqlmodel import select
 from starlette.middleware.sessions import SessionMiddleware
 
 app = FastAPI(lifespan=lifespan)
+import os
 
 secret_key = os.getenv("SESSION_SECRET_KEY", "fallback_secret_key")
 app.add_middleware(SessionMiddleware, secret_key=secret_key)
@@ -135,7 +135,11 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
     await db.commit()
 
 
-async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
+async def get_page_data(request: Request, page: int, db: AsyncSession, user: Depends, msg: str):
+
+    per_page = 5  # количество филиалов на страницу
+
+    # --- Получаем все филиалы с пагинацией ---
     result = await db.execute(
         select(Branche)
         .order_by(Branche.id)
@@ -144,32 +148,27 @@ async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
     )
     branches = result.scalars().all()
 
-    total_branches_result = await db.execute(select(Branche))
-    total_branches = total_branches_result.scalars().all()
+    total_branches = (await db.execute(select(Branche))).scalars().all()
     total_pages = (len(total_branches) + per_page - 1) // per_page
-
     start_page = max(page - 1, 1)
     end_page = min(page + 1, total_pages)
 
-    return branches, total_branches, total_pages, start_page, end_page
+    # --- Получаем все метрики ---
+    metrics = (
+        (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
+    )
 
-async def fetch_metrics(db: AsyncSession):
-    result = await db.execute(select(Metric).order_by(Metric.id))
-    return result.scalars().all()
+    # --- Получаем все branchdata ---
+    branchdata_rows = (await db.execute(select(BranchData))).scalars().all()
 
-async def fetch_branchdata(db: AsyncSession):
-    result = await db.execute(select(BranchData))
-    return result.scalars().all()
-
-def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int], BranchData]:
+    # --- Строим словарь последней записи для каждой пары (branch_id, metric_id) ---
     latest_data = {}
     for bd in branchdata_rows:
         key = (bd.branch_id, bd.metric_id)
         if key not in latest_data or bd.record_date > latest_data[key].record_date:
             latest_data[key] = bd
-    return latest_data
 
-def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
+    # --- Формируем table_data ---
     table_data = []
     for branch in branches:
         row = {
@@ -189,14 +188,13 @@ def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data
             else:
                 row["metrics"][metric.name] = {
                     "id": None,
-                    "value": 0,
+                    "value": 0,  # заменим пустое значение на 0 для подсчета
                     "record_date": None,
                     "metric_id": metric.id,
                 }
         table_data.append(row)
-    return table_data
 
-def calculate_totals(total_branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
+    # --- Считаем суммы по каждой метрике по всей таблице ---
     totals = {}
     for metric in metrics:
         total = 0
@@ -205,40 +203,27 @@ def calculate_totals(total_branches: list[Branche], metrics: list[Metric], lates
             if bd and bd.value is not None:
                 total += float(bd.value)
         totals[metric.name] = total
-    return totals
 
-def find_latest_date(branchdata_rows: list[BranchData]):
+    # --- Находим самую актуальную дату среди всех branchdata ---
     latest_date = None
     for bd in branchdata_rows:
         if bd.record_date:
             if latest_date is None or bd.record_date > latest_date:
                 latest_date = bd.record_date
-    return latest_date
 
-# --- Основная функция ---
-async def get_page_data(request: Request, page: int, db: AsyncSession, user: Depends, msg: str):
-    branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
-    metrics = await fetch_metrics(db)
-    branchdata_rows = await fetch_branchdata(db)
-
-    latest_data = build_latest_data(branchdata_rows)
-    table_data = build_table_data(branches, metrics, latest_data)
-    totals = calculate_totals(total_branches, metrics, latest_data)
-    latest_date = find_latest_date(branchdata_rows)
-
-    return {
-        "request": request,
-        "user": user,
-        "metrics": metrics,
-        "table_data": table_data,
-        "page": page,
-        "total_pages": total_pages,
-        "start_page": start_page,
-        "end_page": end_page,
-        "msg": msg,
-        "latest_date": latest_date,
-        "totals": totals,
-    }
+    return  {
+            "request": request,
+            "user": user,
+            "metrics": metrics,
+            "table_data": table_data,
+            "page": page,
+            "total_pages": total_pages,
+            "start_page": start_page,
+            "end_page": end_page,
+            "msg": msg,
+            "latest_date": latest_date,
+            "totals": totals,  # передаём суммы в шаблон
+        }
 
 
 # --- Главная страница с возможностью отображения сообщения ---

@@ -1,18 +1,21 @@
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 
 import aiohttp
 import aiomysql
+from models import AsyncSessionLocal, BranchData, Branche, Metric, engine
 from sqlmodel import SQLModel, select
 
-from models import AsyncSessionLocal, BranchData, Branche, Metric, engine
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # ==============================
 # --- Конфигурация ---
 # ==============================
-with open("config.json", "r") as f:
+with open("config.json") as f:
     config = json.load(f)
 
 BITRIX_BASE_URL = "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4"
@@ -50,7 +53,7 @@ async def retry_forever(
         try:
             return await func(*args, **kwargs)
         except Exception as e:
-            print(
+            logger.error(
                 f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка при работе \
                     с {name}: {e}. Повтор через {delay} сек (попытка {attempt})"
             )
@@ -71,17 +74,17 @@ async def init_mysql_pool(timeout: int = 10):
 
     while True:
         try:
-            print("[INFO] Подключение к MySQL...")
+            logger.info("[INFO] Подключение к MySQL...")
             # asyncio.wait_for ограничивает время await
             mysql_pool = await asyncio.wait_for(
                 aiomysql.create_pool(**MYSQL_CONFIG), timeout=timeout
             )
-            print("[OK] Успешное подключение к MySQL")
+            logger.info("[OK] Успешное подключение к MySQL")
             return mysql_pool
-        except asyncio.TimeoutError:
-            print(f"[ERROR] Таймаут подключения к MySQL ({timeout} сек)")
+        except TimeoutError:
+            logger.error(f"[ERROR] Таймаут подключения к MySQL ({timeout} сек)")
         except Exception as e:
-            print(
+            logger.error(
                 f"[ERROR] [{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек..."
             )
 
@@ -183,7 +186,7 @@ async def update_branches(db, departments, metrics):
             db.add(branch)
             await db.commit()
             await db.refresh(branch)
-            print(f"✅ Добавлен филиал: {name}")
+            logger.info(f"✅ Добавлен филиал: {name}")
 
         for metric in metrics:
             stmt_check = select(BranchData).where(
@@ -207,8 +210,6 @@ async def update_branches(db, departments, metrics):
     await db.commit()
 
 
-import asyncio
-
 async def process_vacations(session, users):
     all_vacations = {}
     sick_leaves = {}
@@ -228,7 +229,7 @@ async def process_vacations(session, users):
 
         user_info = user_info_result[0]
         # print(user_info.get("UF_USR_1759203471311"))
-        is_special_user = user_info.get("UF_USR_1759203471311") == '105'
+        is_special_user = user_info.get("UF_USR_1759203471311") == "105"
 
         # Получаем department_id
         dept_id = None
@@ -279,7 +280,7 @@ async def update_vacations(db, departments_employees):
         )
         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
         if not branch:
-            print(f"[WARNING] Филиал для department_id={dept_id} не найден")
+            logger.warning(f"[WARNING] Филиал для department_id={dept_id} не найден")
             continue
 
         for metric_id, employees_set in metrics_dict.items():
@@ -292,7 +293,7 @@ async def update_vacations(db, departments_employees):
 
             if branch_data:
                 branch_data.value = len(employees_set)
-                print(
+                logger.info(
                     f"🔄 Обновлено значение (metric {metric_id}): {branch.name} ({len(employees_set)})"
                 )
             else:
@@ -304,7 +305,7 @@ async def update_vacations(db, departments_employees):
                         value=len(employees_set),
                     )
                 )
-                print(
+                logger.info(
                     f"✅ Добавлена новая запись (metric {metric_id}): {branch.name} ({len(employees_set)})"
                 )
 
@@ -321,7 +322,7 @@ async def schedule_update_loop():
         if now >= target_time:
             target_time += timedelta(days=1)
         wait_seconds = (target_time - now).total_seconds()
-        print(
+        logger.info(
             f"[INFO] Следующее обновление через {wait_seconds / 3600:.2f} ч."
         )
         await asyncio.sleep(wait_seconds)
@@ -350,7 +351,7 @@ async def schedule_update_loop():
 # ==============================
 @asynccontextmanager
 async def lifespan(app):
-    print(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
+    logger.info(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     # Создаём таблицы (await, но это быстро)
     async with engine.begin() as conn:
@@ -362,7 +363,7 @@ async def lifespan(app):
         try:
             await init_mysql_pool()
         except Exception as e:
-            print(f"[ERROR] Не удалось инициализировать MySQL: {e}")
+            logger.error(f"[ERROR] Не удалось инициализировать MySQL: {e}")
 
         while True:
             try:
@@ -371,7 +372,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[ERROR] Фоновое обновление завершилось с ошибкой: {e}")
+                logger.error(f"[ERROR] Фоновое обновление завершилось с ошибкой: {e}")
                 await asyncio.sleep(30)  # ждём перед повтором
 
     # Запускаем таск **без await**, чтобы FastAPI стартовал сразу
