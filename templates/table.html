@@ -80,7 +80,20 @@
                         </td>
                     {% endif %}
                 </tr>
+
             {% endfor %}
+
+            <!-- Строка с суммами -->
+            <tr style="font-weight: bold; background-color: #f0f0f0;">
+                <td>ИТОГО</td>
+                {% for metric in metrics %}
+                    <td>{{ totals[metric.name] }}</td>
+                {% endfor %}
+                {% if user.id == 1 %}
+                    <td></td> <!-- пустой столбец для действия -->
+                {% endif %}
+            </tr>
+
         </table>
     </div>
 

@@ -94,7 +94,7 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
     )
     latest_branchdata = result.scalars().all()
 
-    print(latest_branchdata)
+    # print(latest_branchdata)
 
     latest_branchdata[1].value = float(Decimal("16"))
     latest_branchdata[4].value = float(Decimal("6"))
@@ -125,8 +125,8 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
         #     # Для всех остальных
         #     bd.value = float(Decimal(latest_branchdata[0].value) \
         #          * Decimal('2'))
-        elif i != 6:
-            bd.value = float(Decimal("0"))
+        # elif i != 6:
+        #     bd.value = float(Decimal("0"))
 
         db.add(bd)
 
@@ -166,18 +166,14 @@ async def index(
     # --- Получаем все branchdata ---
     branchdata_rows = (await db.execute(select(BranchData))).scalars().all()
 
-    # --- Строим словарь последней записи для каждой пары
-    # (branch_id, metric_id) ---
+    # --- Строим словарь последней записи для каждой пары (branch_id, metric_id) ---
     latest_data = {}
     for bd in branchdata_rows:
         key = (bd.branch_id, bd.metric_id)
-        if (
-            key not in latest_data
-            or bd.record_date > latest_data[key].record_date
-        ):
+        if key not in latest_data or bd.record_date > latest_data[key].record_date:
             latest_data[key] = bd
 
-    # Формируем table_data
+    # --- Формируем table_data ---
     table_data = []
     for branch in branches:
         row = {
@@ -197,13 +193,23 @@ async def index(
             else:
                 row["metrics"][metric.name] = {
                     "id": None,
-                    "value": "",
+                    "value": 0,  # заменим пустое значение на 0 для подсчета
                     "record_date": None,
                     "metric_id": metric.id,
                 }
         table_data.append(row)
 
-    # Находим самую актуальную дату среди всех branchdata
+    # --- Считаем суммы по каждой метрике по всей таблице ---
+    totals = {}
+    for metric in metrics:
+        total = 0
+        for branch in total_branches:
+            bd = latest_data.get((branch.id, metric.id))
+            if bd and bd.value is not None:
+                total += float(bd.value)
+        totals[metric.name] = total
+
+    # --- Находим самую актуальную дату среди всех branchdata ---
     latest_date = None
     for bd in branchdata_rows:
         if bd.record_date:
@@ -223,6 +229,7 @@ async def index(
             "end_page": end_page,
             "msg": msg,
             "latest_date": latest_date,
+            "totals": totals,  # передаём суммы в шаблон
         },
     )
 

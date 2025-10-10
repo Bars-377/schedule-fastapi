@@ -21,16 +21,16 @@ BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
 UPDATE_HOUR = 10
-UPDATE_MINUTE = 54
+UPDATE_MINUTE = 00
 
 today = date.today()
 
 MYSQL_CONFIG = {
-    "host": "172.18.10.36",
-    "user": "remote_reader",
-    "password": "#+E;8mCs13^4BpI",
-    "db": "sitemanager",
-    "charset": "utf8",
+    "host": config["mysql"]["host"],
+    "user": config["mysql"]["user"],
+    "password": config["mysql"]["password"],
+    "db": config["mysql"]["database"],
+    "charset": config["mysql"]["charset"],
 }
 
 # ==============================
@@ -207,43 +207,69 @@ async def update_branches(db, departments, metrics):
     await db.commit()
 
 
+import asyncio
+
 async def process_vacations(session, users):
-    departments_employees = {}
-    for user in users:
+    all_vacations = {}
+    sick_leaves = {}
+    special_users = {}
+
+    semaphore = asyncio.Semaphore(10)  # ограничиваем количество параллельных запросов
+
+    async def process_user(user):
         employee_id = int(user["ID"])
-        absences = await fetch_absences_for_user_async(employee_id)
+
+        async with semaphore:
+            absences = await fetch_absences_for_user_async(employee_id)
+            user_info_result = await fetch_user_info(session, employee_id)
+
+        if not user_info_result:
+            return
+
+        user_info = user_info_result[0]
+        # print(user_info.get("UF_USR_1759203471311"))
+        is_special_user = user_info.get("UF_USR_1759203471311") == '105'
+
+        # Получаем department_id
+        dept_id = None
+        if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
+            dept_id_raw = user_info["UF_DEPARTMENT"][0]
+            async with semaphore:
+                dept_id = await fetch_department_info(session, dept_id_raw)
+        if not dept_id:
+            return
+
+        # Спецпользователи для метрики 9
+        if is_special_user:
+            special_users.setdefault(dept_id, {}).setdefault(9, set()).add(employee_id)
 
         for absence in absences:
             absence_type = absence["ABSENCE_TYPE"]
-            if absence_type not in ("больничный", "отпуск ежегодный"):
-                continue
-
-            active_from = datetime.strptime(
-                str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S"
-            ).date()
-            active_to = datetime.strptime(
-                str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S"
-            ).date()
+            active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
+            active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
             if not (active_from <= today <= active_to):
                 continue
 
-            user_info_result = await fetch_user_info(session, employee_id)
-            if not user_info_result:
-                continue
+            if absence_type == "больничный":
+                sick_leaves.setdefault(dept_id, {}).setdefault(14, set()).add(employee_id)
+            elif absence_type in (
+                "отпуск ежегодный",
+                "отпуск декретный",
+                "отпуск без сохранения заработной платы",
+            ):
+                all_vacations.setdefault(dept_id, {}).setdefault(15, set()).add(employee_id)
 
-            user_info = user_info_result[0]
-            if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
-                dept_id = user_info["UF_DEPARTMENT"][0]
-                dept_department_id = await fetch_department_info(
-                    session, dept_id
-                )
-                if dept_department_id:
-                    metric_id = 14 if absence_type == "больничный" else 15
-                    departments_employees.setdefault(
-                        dept_department_id, {}
-                    ).setdefault(metric_id, set()).add(employee_id)
+    # Параллельная обработка всех пользователей
+    await asyncio.gather(*(process_user(u) for u in users))
 
-    return departments_employees
+    # print(sick_leaves)
+    # print('-------------------------')
+    # print(all_vacations)
+    # print('-------------------------')
+    # print(special_users)
+    # print('-------------------------')
+
+    return sick_leaves, all_vacations, special_users
 
 
 async def update_vacations(db, departments_employees):
@@ -308,10 +334,15 @@ async def schedule_update_loop():
                 metrics = (await db.execute(select(Metric))).scalars().all()
                 await update_branches(db, departments, metrics)
 
-            departments_employees = await process_vacations(session, users)
+            # print(session)
+            # print(users)
+
+            sick_leaves, all_vacations, special_users = await process_vacations(session, users)
 
             async with AsyncSessionLocal() as db:
-                await update_vacations(db, departments_employees)
+                await update_vacations(db, sick_leaves)
+                await update_vacations(db, all_vacations)
+                await update_vacations(db, special_users)
 
 
 # ==============================

@@ -12,10 +12,10 @@ with open("config.json", "r") as f:
     config = json.load(f)
 
 # --- БД ---
-DB_USER = config["DB_USER"]
-DB_PASSWORD = config["DB_PASSWORD"]
-DB_HOST = config["DB_HOST"]
-DB_NAME = config["DB_NAME"]
+DB_USER = config["postgresql"]["user"]
+DB_PASSWORD = config["postgresql"]["password"]
+DB_HOST = config["postgresql"]["host"]
+DB_NAME = config["postgresql"]["database"]
 
 DATABASE_URL = (
     f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
