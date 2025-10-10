@@ -12,50 +12,47 @@
 
     <div class="table-container">
         <table>
-            <!-- Первая строка: заголовок таблицы -->
+            <!-- Заголовок таблицы -->
             <tr>
                 <th>Отдел ОГКУ "ТО МФЦ"</th>
                 {% for metric in metrics %}
                     <th>{{ metric.name }}</th>
                 {% endfor %}
-                {% if user.id == 1 %}<th>Действие</th>{% endif %}
-            </tr>
-
-            <!-- Вторая строка: дата поверх всех метрик -->
-            <tr>
-                <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
-                <td colspan="{{ metrics|length }}">
-                    {{ latest_date or '-' }}
-                </td>
                 {% if user.id == 1 %}
-                    <td style="background-color: #e0e0e0;"></td>
+                    <th>Действие</th>
                 {% endif %}
             </tr>
 
-            <!-- Третья строка: кнопки удаления метрик (только для admin) -->
+            <!-- Дата последнего обновления -->
+            <tr>
+                <td style="background-color: #e0e0e0;"></td>
+                <td colspan="{{ metrics|length + (1 if user.id == 1 else 0) }}">
+                    {{ latest_date or '-' }}
+                </td>
+            </tr>
+
+            <!-- Кнопки удаления метрик (только для admin) -->
             {% if user.id == 1 %}
             <tr>
-                <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
+                <td style="background-color: #e0e0e0;"></td>
                 {% for metric in metrics %}
                     <td>
-                        {% if not loop.first %}
                         <form class="table-form" method="post" action="/delete_metric/{{ metric.id }}">
                             <input type="hidden" name="page" value="{{ page }}">
                             <input type="submit" value="Удалить" class="table-btn-del">
                         </form>
-                        {% endif %}
                     </td>
                 {% endfor %}
-                <td style="background-color: #e0e0e0;"></td> <!-- пустой столбец для действия -->
+                <td style="background-color: #e0e0e0;"></td>
             </tr>
             {% endif %}
 
-            <!-- Далее идут строки с данными -->
+            <!-- Данные филиалов -->
             {% for row in table_data %}
                 <tr>
                     <td>{{ row.branch_name }}</td>
                     {% for metric_name, metric_data in row.metrics.items() %}
-                        {% if user.can_edit == 1 and (loop.index0 == 0 or loop.index0 == 6) %}
+                        {% if user.can_edit == 1 and metric_name in ["Метрика1", "Метрика7"] %}
                             <td>
                                 <form class="table-form" method="post" action="/update/{{ metric_data.id }}">
                                     <input type="number" name="value" step="any" value="{{ metric_data.value }}">
@@ -70,7 +67,6 @@
                             <td>{{ metric_data.value }}</td>
                         {% endif %}
                     {% endfor %}
-
                     {% if user.id == 1 %}
                         <td>
                             <form class="table-form" method="post" action="/delete/{{ row.branch_id }}">
@@ -80,20 +76,18 @@
                         </td>
                     {% endif %}
                 </tr>
-
             {% endfor %}
 
-            <!-- Строка с суммами -->
+            <!-- Итоговая строка -->
             <tr style="font-weight: bold; background-color: #f0f0f0;">
                 <td>ИТОГО</td>
                 {% for metric in metrics %}
                     <td>{{ totals[metric.name] }}</td>
                 {% endfor %}
                 {% if user.id == 1 %}
-                    <td></td> <!-- пустой столбец для действия -->
+                    <td></td>
                 {% endif %}
             </tr>
-
         </table>
     </div>
 
@@ -103,7 +97,6 @@
             <a href='/?page=1'>1</a>
             {% if start_page > 2 %}…{% endif %}
         {% endif %}
-
         {% for p in range(start_page, end_page + 1) %}
             {% if p == page %}
                 <strong>{{ p }}</strong>
@@ -111,7 +104,6 @@
                 <a href='/?page={{ p }}'>{{ p }}</a>
             {% endif %}
         {% endfor %}
-
         {% if end_page < total_pages %}
             {% if end_page < total_pages - 1 %}…{% endif %}
             <a href='/?page={{ total_pages }}'>{{ total_pages }}</a>
@@ -138,41 +130,40 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Оверлей и сообщение сохранения -->
+    <div id="overlay" style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 9998;
+    "></div>
+
+    <div id="save-msg" style="
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 128, 0, 0.9);
+        color: white;
+        padding: 20px 40px;
+        font-size: 24px;
+        font-weight: bold;
+        border-radius: 10px;
+        z-index: 9999;
+        box-shadow: 0 0 10px #000;
+    ">
+        {{ msg }}
+    </div>
+
+    <script>
+        const hasMsg = {{ 'true' if msg else 'false' }};
+    </script>
+    <script src="/static/script.js"></script>
 </body>
-
-<!-- Оверлей и сообщение сохранения -->
-<div id="overlay" style="
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 9998;
-"></div>
-
-<div id="save-msg" style="
-    display: none;
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: rgba(0, 128, 0, 0.9);
-    color: white;
-    padding: 20px 40px;
-    font-size: 24px;
-    font-weight: bold;
-    border-radius: 10px;
-    z-index: 9999;
-    box-shadow: 0 0 10px #000;
-">
-    {{ msg }}
-</div>
-
-<script>
-	const hasMsg = {{ 'true' if msg else 'false' }};
-</script>
-<script src="/static/script.js"></script>
-
 </html>
