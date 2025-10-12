@@ -9,9 +9,10 @@
     --bg-table-header: #e0e0e0;
     --text-color: #333;
     --border-radius: 10px;
-    --box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    --box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     --transition-speed: 0.3s;
-    --td-max-width: 150px; /* ширина для свернутого текста */
+    --td-max-width: 150px;
+    /* ширина для свернутого текста */
 }
 
 /* ===== Общие стили ===== */
@@ -28,7 +29,9 @@ body {
     color: var(--text-color);
 }
 
-h2, h3, p {
+h2,
+h3,
+p {
     text-align: center;
     margin: 10px 0;
 }
@@ -42,13 +45,10 @@ a:hover {
     text-decoration: underline;
 }
 
-.msg-green {
-    color: green;
-    font-weight: bold;
-}
-
 /* ===== Универсальные кнопки ===== */
-.button, .table-btn, .table-btn-del {
+.button,
+.table-btn,
+.table-btn-del {
     padding: 8px 20px;
     border: none;
     border-radius: var(--border-radius);
@@ -112,11 +112,14 @@ table {
     border-collapse: collapse;
     width: 100%;
     background: var(--bg-white);
-    table-layout: fixed; /* 👈 вот это главное */
-    min-width: 600px; /* минимум для маленьких таблиц */
+    table-layout: fixed;
+    /* 👈 вот это главное */
+    min-width: 600px;
+    /* минимум для маленьких таблиц */
 }
 
-th, td {
+th,
+td {
     border: 1px solid #ccc;
     padding: 10px 15px;
     text-align: center;
@@ -131,8 +134,10 @@ th {
 }
 
 /* ===== Динамическая ширина столбцов ===== */
-th, td {
-    width: 150px; /* или auto, если хочешь равномерное распределение */
+th,
+td {
+    width: 150px;
+    /* или auto, если хочешь равномерное распределение */
     word-wrap: break-word;
     text-align: center;
 }
@@ -245,7 +250,7 @@ td input[type="submit"] {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0,0,0,0.5);
+    background: rgba(0, 0, 0, 0.5);
     z-index: 9998;
 }
 

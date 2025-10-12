@@ -303,7 +303,7 @@ async def add_branch(
     last_page = last_page if last_page > 0 else 1
 
     return RedirectResponse(
-        f"/?page={last_page}&msg=Отдел+добавлен", status_code=303
+        f"/?page={last_page}&msg=Отдел+добавлен&status=200", status_code=303
     )
 
 
@@ -401,7 +401,7 @@ async def update_branchdata(
     await recalc(branchdata, db)
 
     await db.refresh(branchdata)
-    return RedirectResponse(f"/?page={page}&msg=Сохранено", status_code=303)
+    return RedirectResponse(f"/?page={page}&msg=Сохранено&status=200", status_code=303)
 
 
 # --- Удаление филиала ---
@@ -429,7 +429,7 @@ async def delete_branch(
     if page > total_pages:
         page = total_pages if total_pages > 0 else 1
 
-    return RedirectResponse(f"/?page={page}&msg=Удалено", status_code=303)
+    return RedirectResponse(f"/?page={page}&msg=Удалено&status=200", status_code=303)
 
 
 @app.get("/register_form", response_class=HTMLResponse)
@@ -493,7 +493,7 @@ async def register(
     request.session["user"] = user.username
 
     # --- Перенаправление на главную с сообщением ---
-    return RedirectResponse(url="/?msg=Регистрация+успешна", status_code=303)
+    return RedirectResponse(url="/?msg=Регистрация+успешна&status=200", status_code=303)
 
 
 @app.get("/login_form", response_class=HTMLResponse)
@@ -549,7 +549,7 @@ async def add_metric(
 ):
     if not name.strip():
         return RedirectResponse(
-            f"/?page={page}&msg=Имя+метрики+не+может+быть+пустым",
+            f"/?page={page}&msg=Имя+метрики+не+может+быть+пустым&status=500",
             status_code=303,
         )
 
@@ -558,7 +558,7 @@ async def add_metric(
     )
     if existing.scalar_one_or_none():
         return RedirectResponse(
-            f"/?page={page}&msg=Метрика+с+таким+именем+уже+существует",
+            f"/?page={page}&msg=Метрика+с+таким+именем+уже+существует&status=500",
             status_code=303,
         )
 
@@ -593,7 +593,7 @@ async def add_metric(
 
     await db.commit()
     return RedirectResponse(
-        f"/?page={page}&msg=Метрика+добавлена", status_code=303
+        f"/?page={page}&msg=Метрика+добавлена&status=200", status_code=303
     )
 
 
@@ -617,7 +617,49 @@ async def delete_metric(
         await db.delete(metric)
         await db.commit()
     return RedirectResponse(
-        f"/?page={page}&msg=Метрика+удалена", status_code=303
+        f"/?page={page}&msg=Метрика+удалена&status=200", status_code=303
+    )
+
+
+# --- Обновление ID метрики (только для админа) ---
+@app.post("/update_metric_id/{metric_id}")
+async def update_metric_id(
+    metric_id: int,
+    new_id: int = Form(...),
+    page: int = Form(1),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_edit_permission),
+):
+    # Проверка, существует ли новая метрика с таким id
+    existing_metric = await db.get(Metric, new_id)
+    if existing_metric:
+        return RedirectResponse(
+            f"/?page={page}&msg=Метрика+с+таким+ID+уже+существует&status=500",
+            status_code=303,
+        )
+
+    metric = await db.get(Metric, metric_id)
+    if not metric:
+        return RedirectResponse(
+            f"/?page={page}&msg=Метрика+не+найдена&status=500",
+            status_code=303,
+        )
+
+    # Обновляем все связанные BranchData
+    await db.execute(
+        BranchData.__table__.update()
+        .where(BranchData.metric_id == metric.id)
+        .values(metric_id=new_id)
+    )
+
+    # Обновляем саму метрику
+    metric.id = new_id
+    db.add(metric)
+    await db.commit()
+
+    return RedirectResponse(
+        f"/?page={page}&msg=ID+метрики+обновлен&status=200",
+        status_code=303,
     )
 
 

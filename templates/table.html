@@ -16,7 +16,15 @@
             <tr>
                 <th>Отдел ОГКУ "ТО МФЦ"</th>
                 {% for metric in metrics %}
-                    <th>{{ metric.name }}</th>
+                    <th>
+                        {{ metric.name }}
+                        {% if user.id == 1 %}
+                            <form class="table-form" method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
+                                <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
+                                <input type="submit" value="Сохранить" class="table-btn">
+                            </form>
+                        {% endif %}
+                    </th>
                 {% endfor %}
                 {% if user.id == 1 %}<th>Действие</th>{% endif %}
             </tr>
