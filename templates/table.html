@@ -11,11 +11,13 @@
 <body>
     <!-- <h2>Таблица отделов</h2> -->
     <p>
-        Привет, {{ user.username }}
+        {% if user.username != 'Guest' %}
+        Привет, {{ user.username }} |
+        {% endif %}
         {% if user.username == 'Guest' %}
-        | <a href='/login_form'>Войти</a>
+        <a href='/login_form'>Войти</a>
         {% else %}
-        | <a href='/logout'>Выйти</a>
+        <a href='/logout'>Выйти</a>
         {% endif %}
     </p>
 
