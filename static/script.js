@@ -1,41 +1,41 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // Показываем сообщение и overlay, если есть msg
-    const urlParams = new URLSearchParams(window.location.search);
-    const msgStatus = parseInt(urlParams.get('status')) || 200;
-    const hasMsg = urlParams.has('msg');
-    if (hasMsg) {
-        const overlay = document.getElementById('overlay');
-        const saveMsg = document.getElementById('save-msg');
+	// Показываем сообщение и overlay, если есть msg
+	const urlParams = new URLSearchParams(window.location.search);
+	const msgStatus = parseInt(urlParams.get('status')) || 200;
+	const hasMsg = urlParams.has('msg');
+	if (hasMsg) {
+		const overlay = document.getElementById('overlay');
+		const saveMsg = document.getElementById('save-msg');
 
 		console.log('Есть сообщение', msgStatus);
 
-        if (overlay && saveMsg) {
-            // Меняем цвет в зависимости от status_code
-            if (typeof msgStatus !== 'undefined') {
-                if (msgStatus >= 200 && msgStatus < 300) {
+		if (overlay && saveMsg) {
+			// Меняем цвет в зависимости от status_code
+			if (typeof msgStatus !== 'undefined') {
+				if (msgStatus >= 200 && msgStatus < 300) {
 					console.log('Зелёный цвет должен примениться');
-                    saveMsg.style.backgroundColor = 'rgba(0, 128, 0, 0.9)'; // зелёный
-                } else if (msgStatus >= 400 && msgStatus < 500) {
+					saveMsg.style.backgroundColor = 'rgba(0, 128, 0, 0.9)'; // зелёный
+				} else if (msgStatus >= 400 && msgStatus < 500) {
 					console.log('Оранжевый цвет');
-                    saveMsg.style.backgroundColor = 'rgba(255, 165, 0, 0.9)'; // оранжевый
-                } else if (msgStatus >= 500) {
+					saveMsg.style.backgroundColor = 'rgba(255, 165, 0, 0.9)'; // оранжевый
+				} else if (msgStatus >= 500) {
 					console.log('Красный цвет');
-                    saveMsg.style.backgroundColor = 'rgba(255, 0, 0, 0.9)'; // красный
-                } else {
+					saveMsg.style.backgroundColor = 'rgba(255, 0, 0, 0.9)'; // красный
+				} else {
 					console.log('Синий цвет');
-                    saveMsg.style.backgroundColor = 'rgba(0, 0, 128, 0.9)'; // синий для прочих
-                }
-            }
+					saveMsg.style.backgroundColor = 'rgba(0, 0, 128, 0.9)'; // синий для прочих
+				}
+			}
 
-            overlay.style.display = 'block';
-            saveMsg.style.display = 'block';
+			overlay.style.display = 'block';
+			saveMsg.style.display = 'block';
 
-            setTimeout(() => {
-                saveMsg.style.display = 'none';
-                overlay.style.display = 'none';
-            }, 1000); // 1 секунда
-        }
-    }
+			setTimeout(() => {
+				saveMsg.style.display = 'none';
+				overlay.style.display = 'none';
+			}, 1000); // 1 секунда
+		}
+	}
 
 	// Убираем msg из URL и со страницы
 	setTimeout(() => {
@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
 	// Добавляем функционал сворачивания длинных текстов
 	document.querySelectorAll('td').forEach(td => {
 		const text = td.textContent.trim();
-		if (text.length > 15) { // если текст длинный
+		if (text.length > 60) { // если текст длинный
 			td.classList.add('collapsed');
 
 			const textSpan = document.createElement('span');

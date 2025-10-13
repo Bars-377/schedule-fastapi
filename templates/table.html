@@ -1,14 +1,23 @@
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
     <meta charset="UTF-8">
     <title>Таблица отделов</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
 </head>
+
 <body>
-    <h2>Таблица отделов</h2>
-    <p>Привет, {{ user.username }} | <a href='/logout'>Выйти</a></p>
+    <!-- <h2>Таблица отделов</h2> -->
+    <p>
+        Привет, {{ user.username }}
+        {% if user.username == 'Guest' %}
+        | <a href='/login_form'>Войти</a>
+        {% else %}
+        | <a href='/logout'>Выйти</a>
+        {% endif %}
+    </p>
 
     <div class="table-container">
         <table>
@@ -16,15 +25,16 @@
             <tr>
                 <th>Отдел ОГКУ "ТО МФЦ"</th>
                 {% for metric in metrics %}
-                    <th>
-                        {{ metric.name }}
-                        {% if user.id == 1 %}
-                            <form method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
-                                <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
-                                <input type="submit" value="Сохранить" class="table-btn">
-                            </form>
-                        {% endif %}
-                    </th>
+                <th>
+                    {{ metric.name }}
+                    {% if user.id == 1 %}
+                    <form method="post" action="/update_metric_id/{{ metric.id }}"
+                        style="display:inline-block; margin-left:5px;">
+                        <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
+                        <input type="submit" value="Сохранить" class="table-btn">
+                    </form>
+                    {% endif %}
+                </th>
                 {% endfor %}
                 {% if user.id == 1 %}<th>Действие</th>{% endif %}
             </tr>
@@ -36,7 +46,7 @@
                     {{ latest_date or '-' }}
                 </td>
                 {% if user.id == 1 %}
-                    <td style="background-color: #e0e0e0;"></td>
+                <td style="background-color: #e0e0e0;"></td>
                 {% endif %}
             </tr>
 
@@ -45,14 +55,14 @@
             <tr>
                 <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
                 {% for metric in metrics %}
-                    <td>
-                        {% if not loop.first %}
-                        <form method="post" action="/delete_metric/{{ metric.id }}">
-                            <input type="hidden" name="page" value="{{ page }}">
-                            <input type="submit" value="Удалить" class="table-btn-del">
-                        </form>
-                        {% endif %}
-                    </td>
+                <td>
+                    {% if not loop.first %}
+                    <form method="post" action="/delete_metric/{{ metric.id }}">
+                        <input type="hidden" name="page" value="{{ page }}">
+                        <input type="submit" value="Удалить" class="table-btn-del">
+                    </form>
+                    {% endif %}
+                </td>
                 {% endfor %}
                 <td style="background-color: #e0e0e0;"></td> <!-- пустой столбец для действия -->
             </tr>
@@ -60,34 +70,34 @@
 
             <!-- Далее идут строки с данными -->
             {% for row in table_data %}
-                <tr>
-                    <td>{{ row.branch_name }}</td>
-                    {% for metric_name, metric_data in row.metrics.items() %}
-                        {% if user.can_edit == 1 and (loop.index0 == 0 or loop.index0 == 6) %}
-                            <td>
-                                <form method="post" action="/update/{{ metric_data.id }}">
-                                    <input type="number" name="value" step="any" value="{{ metric_data.value }}">
-                                    <input type="hidden" name="branch_id" value="{{ row.branch_id }}">
-                                    <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
-                                    <input type="hidden" name="page" value="{{ page }}">
-                                    <br>
-                                    <input type="submit" value="Сохранить" class="table-btn">
-                                </form>
-                            </td>
-                        {% else %}
-                            <td>{{ metric_data.value }}</td>
-                        {% endif %}
-                    {% endfor %}
+            <tr>
+                <td>{{ row.branch_name }}</td>
+                {% for metric_name, metric_data in row.metrics.items() %}
+                {% if user.can_edit == 1 and (loop.index0 == 0 or loop.index0 == 6) %}
+                <td>
+                    <form method="post" action="/update/{{ metric_data.id }}">
+                        <input type="number" name="value" step="any" value="{{ metric_data.value }}">
+                        <input type="hidden" name="branch_id" value="{{ row.branch_id }}">
+                        <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
+                        <input type="hidden" name="page" value="{{ page }}">
+                        <br>
+                        <input type="submit" value="Сохранить" class="table-btn">
+                    </form>
+                </td>
+                {% else %}
+                <td>{{ metric_data.value }}</td>
+                {% endif %}
+                {% endfor %}
 
-                    {% if user.id == 1 %}
-                        <td>
-                            <form method="post" action="/delete/{{ row.branch_id }}">
-                                <input type="hidden" name="page" value="{{ page }}">
-                                <input type="submit" value="Удалить" class="table-btn-del">
-                            </form>
-                        </td>
-                    {% endif %}
-                </tr>
+                {% if user.id == 1 %}
+                <td>
+                    <form method="post" action="/delete/{{ row.branch_id }}">
+                        <input type="hidden" name="page" value="{{ page }}">
+                        <input type="submit" value="Удалить" class="table-btn-del">
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
 
             {% endfor %}
 
@@ -95,10 +105,10 @@
             <tr style="font-weight: bold; background-color: #f0f0f0;">
                 <td>ИТОГО</td>
                 {% for metric in metrics %}
-                    <td>{{ totals[metric.name] }}</td>
+                <td>{{ totals[metric.name] }}</td>
                 {% endfor %}
                 {% if user.id == 1 %}
-                    <td></td> <!-- пустой столбец для действия -->
+                <td></td> <!-- пустой столбец для действия -->
                 {% endif %}
             </tr>
 
@@ -108,22 +118,21 @@
     <!-- Пагинация -->
     <div class="pagination-form">
         {% if start_page > 1 %}
-            <a href='/?page=1'>1</a>
-            {% if start_page > 2 %}…{% endif %}
+        <a href='/?page=1'>1</a>
+        {% if start_page > 2 %}…{% endif %}
         {% endif %}
 
         {% for p in range(start_page, end_page + 1) %}
-            {% if p == page %}
-                <strong>{{ p }}</strong>
-            {% else %}
-                <a href='/?page={{ p }}'>{{ p }}</a>
-            {% endif %}
+        {% if p == page %}
+        <strong>{{ p }}</strong>
+        {% else %}
+        <a href='/?page={{ p }}'>{{ p }}</a>
+        {% endif %}
         {% endfor %}
 
-        {% if end_page < total_pages %}
-            {% if end_page < total_pages - 1 %}…{% endif %}
-            <a href='/?page={{ total_pages }}'>{{ total_pages }}</a>
-        {% endif %}
+        {% if end_page < total_pages %} {% if end_page < total_pages - 1 %}…{% endif %} <a
+            href='/?page={{ total_pages }}'>{{ total_pages }}</a>
+            {% endif %}
     </div>
 
     <!-- Добавление отделов и метрик -->
@@ -179,7 +188,7 @@
 </div>
 
 <script>
-	const hasMsg = {{ 'true' if msg else 'false' }};
+    const hasMsg = {{ 'true' if msg else 'false' }};
 </script>
 <script src="/static/script.js"></script>
 

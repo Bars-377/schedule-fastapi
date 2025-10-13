@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 from datetime import date
@@ -55,13 +56,29 @@ async def get_user(db: AsyncSession, username: str):
     return result.scalar_one_or_none()
 
 
+# async def get_current_user(
+#     request: Request, db: AsyncSession = Depends(get_db)
+# ):
+#     username = request.session.get("user")
+#     if not username:
+#         return None
+#     return await get_user(db, username)
+
+
 async def get_current_user(
     request: Request, db: AsyncSession = Depends(get_db)
 ):
     username = request.session.get("user")
-    if not username:
-        return None
-    return await get_user(db, username)
+    if username:
+        user = await get_user(db, username)
+        if user:
+            return user
+    # Если нет авторизации, возвращаем гостя
+    guest_user = await get_user(db, "Guest")
+    if guest_user:
+        # Убираем права редактирования
+        guest_user.can_edit = 0
+    return guest_user
 
 
 async def require_login(user=Depends(get_current_user)):
@@ -135,7 +152,27 @@ async def recalc(branchdata: BranchData, db: AsyncSession):
     await db.commit()
 
 
+# Чтение конфигурации
+CONFIG_PATH = BASE_DIR / "config.json"
+if CONFIG_PATH.exists():
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        config = json.load(f)
+else:
+    config = {"show_all_on_first_page": False}
+
+
 async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
+    # Проверка, нужно ли отображать все на первой странице
+    if config.get("show_all_on_first_page", False) and page == 1:
+        result = await db.execute(select(Branche).order_by(Branche.id))
+        branches = result.scalars().all()
+        total_branches = branches
+        total_pages = 1
+        start_page = 1
+        end_page = 1
+        return branches, total_branches, total_pages, start_page, end_page
+
+    # Обычная логика с пагинацией
     result = await db.execute(
         select(Branche)
         .order_by(Branche.id)
@@ -152,6 +189,7 @@ async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
     end_page = min(page + 1, total_pages)
 
     return branches, total_branches, total_pages, start_page, end_page
+
 
 async def fetch_metrics(db: AsyncSession):
     result = await db.execute(select(Metric).order_by(Metric.id))
@@ -529,10 +567,18 @@ async def login(
     return RedirectResponse("/", status_code=303)
 
 
+# @app.get("/logout")
+# async def logout(request: Request):
+#     request.session.clear()
+#     return RedirectResponse("/login_form", status_code=303)
+
+
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/login_form", status_code=303)
+    # Ставим пользователя Guest
+    request.session["user"] = "Guest"
+    return RedirectResponse("/", status_code=303)
 
 
 @app.exception_handler(HTTPException)
