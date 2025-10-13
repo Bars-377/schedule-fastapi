@@ -19,7 +19,7 @@
                     <th>
                         {{ metric.name }}
                         {% if user.id == 1 %}
-                            <form class="table-form" method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
+                            <form method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
                                 <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
                                 <input type="submit" value="Сохранить" class="table-btn">
                             </form>
@@ -47,7 +47,7 @@
                 {% for metric in metrics %}
                     <td>
                         {% if not loop.first %}
-                        <form class="table-form" method="post" action="/delete_metric/{{ metric.id }}">
+                        <form method="post" action="/delete_metric/{{ metric.id }}">
                             <input type="hidden" name="page" value="{{ page }}">
                             <input type="submit" value="Удалить" class="table-btn-del">
                         </form>
@@ -65,7 +65,7 @@
                     {% for metric_name, metric_data in row.metrics.items() %}
                         {% if user.can_edit == 1 and (loop.index0 == 0 or loop.index0 == 6) %}
                             <td>
-                                <form class="table-form" method="post" action="/update/{{ metric_data.id }}">
+                                <form method="post" action="/update/{{ metric_data.id }}">
                                     <input type="number" name="value" step="any" value="{{ metric_data.value }}">
                                     <input type="hidden" name="branch_id" value="{{ row.branch_id }}">
                                     <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
@@ -81,7 +81,7 @@
 
                     {% if user.id == 1 %}
                         <td>
-                            <form class="table-form" method="post" action="/delete/{{ row.branch_id }}">
+                            <form method="post" action="/delete/{{ row.branch_id }}">
                                 <input type="hidden" name="page" value="{{ page }}">
                                 <input type="submit" value="Удалить" class="table-btn-del">
                             </form>

@@ -169,19 +169,22 @@ td.expanded .text-content {
 }
 
 /* ===== Формы внутри таблицы ===== */
-td form {
+td form,
+th form {
     margin: 0;
     padding: 0;
     background: none;
     box-shadow: none;
 }
 
-td input[type="number"] {
+td input[type="number"],
+th input[type="number"] {
     width: 80px;
     padding: 5px;
 }
 
-td input[type="submit"] {
+td input[type="submit"],
+th input[type="submit"] {
     padding: 4px 12px;
     font-size: 0.9em;
 }

@@ -343,64 +343,61 @@ async def update_branchdata(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_edit_permission),
 ):
-
-    # Использование:
     value = parse_number(value)
+    today = date.today()
 
-    last_date = await get_last_date(db, branch_id, metric_id)
-
-    # --- Обновляем или создаём текущую запись ---
+    # --- Проверяем, есть ли запись на сегодня ---
     result = await db.execute(
         select(BranchData).where(
             BranchData.branch_id == branch_id,
             BranchData.metric_id == metric_id,
-            BranchData.record_date == last_date,
+            BranchData.record_date == today,
         )
     )
     branchdata = result.scalar_one_or_none()
 
     if branchdata:
+        # --- Обновляем существующую запись за сегодня ---
         branchdata.value = Decimal(value)
         db.add(branchdata)
         await db.commit()
+        await db.refresh(branchdata)
     else:
+        # --- Создаём новую запись с сегодняшней датой ---
         branchdata = BranchData(
             branch_id=branch_id,
             metric_id=metric_id,
-            record_date=last_date,
+            record_date=today,
             value=Decimal(value),
         )
         db.add(branchdata)
         await db.commit()
         await db.refresh(branchdata)
 
-    # --- Создаём недостающие branchdata для новых метрик на последнюю дату ---
-    metrics = (
-        (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
-    )
+    # --- Создаём недостающие branchdata для всех метрик на сегодняшнюю дату ---
+    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     for metric in metrics:
-        last_date_metric = await get_last_date(db, branch_id, metric.id)
         result = await db.execute(
             select(BranchData).where(
                 BranchData.branch_id == branch_id,
                 BranchData.metric_id == metric.id,
-                BranchData.record_date == last_date_metric,
+                BranchData.record_date == today,
             )
         )
         if not result.scalar_one_or_none():
             new_bd = BranchData(
                 branch_id=branch_id,
                 metric_id=metric.id,
-                record_date=last_date_metric,
-                value=0.0,
+                record_date=today,
+                value=Decimal("0.0"),
             )
             db.add(new_bd)
     await db.commit()
 
-    # --- Пересчёт всех метрик филиала ---
+    # --- Пересчёт метрик для филиала ---
     await recalc(branchdata, db)
-
     await db.refresh(branchdata)
+
     return RedirectResponse(f"/?page={page}&msg=Сохранено&status=200", status_code=303)
 
 
