@@ -376,17 +376,23 @@ async def lifespan(app):
                 await asyncio.sleep(30)  # ждём перед повтором
 
     # Запускаем таск **без await**, чтобы FastAPI стартовал сразу
-    task = asyncio.create_task(background_tasks())
+    if config.get("enable_background_task", True):
+        task = asyncio.create_task(background_tasks())
+        logger.info("✅ Фоновая задача включена")
+    else:
+        task = None
+        logger.info("⚠️ Фоновая задача отключена")
 
     try:
         yield
     finally:
-        # При shutdown отменяем таск
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # При shutdown отменяем таск, если он был создан
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         if mysql_pool:
             mysql_pool.close()

@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -198,13 +198,19 @@ def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data
 
 def calculate_totals(total_branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
     totals = {}
+
     for metric in metrics:
-        total = 0
+        total = Decimal("0.00")
         for branch in total_branches:
             bd = latest_data.get((branch.id, metric.id))
             if bd and bd.value is not None:
-                total += float(bd.value)
+                # Преобразуем к Decimal через строку, чтобы избежать ошибок float
+                total += Decimal(str(bd.value))
+
+        # Округляем до двух знаков и сохраняем
+        total = total.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
         totals[metric.name] = total
+
     return totals
 
 def find_latest_date(branchdata_rows: list[BranchData]):
