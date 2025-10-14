@@ -72,4 +72,15 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 
+	const colors = ["#4F83CC", "green"];
+	let index = 0;
+
+	document.querySelectorAll("table tbody tr").forEach(tr => {
+		const color = colors[index % colors.length]; // выбираем цвет по очереди
+		index++;
+		tr.querySelectorAll("td").forEach(td => {
+			td.style.borderBottom = "1px solid " + color; // только нижняя рамка
+		});
+	});
+
 });
