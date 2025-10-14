@@ -25,8 +25,8 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 12
-UPDATE_MINUTE = 17
+UPDATE_HOUR = 10
+UPDATE_MINUTE = 00
 
 today = date.today()
 
@@ -467,40 +467,37 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
 async def lifespan(app):
     logger.info(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
 
-    # Создаём таблицы (await, но это быстро)
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-
-    # --- Фоновая задача для обновлений ---
-    async def background_tasks():
-        # Инициализация MySQL пула
-        try:
-            await init_mysql_pool()
-        except Exception as e:
-            logger.error(f"Не удалось инициализировать MySQL: {e}")
-
-        while True:
-            try:
-                # Здесь внутри schedule_update_loop уже свой retry_forever
-                await schedule_update_loop()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Фоновое обновление завершилось с ошибкой: {e}")
-                await asyncio.sleep(30)  # ждём перед повтором
-
-    # Запускаем таск **без await**, чтобы FastAPI стартовал сразу
+    task = None
     if config.get("enable_background_task", True):
-        task = asyncio.create_task(background_tasks())
         logger.info("✅ Фоновая задача включена")
+
+        # Инициализация MySQL пула и создание таблиц
+        async with engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+
+        async def background_tasks():
+            try:
+                await init_mysql_pool()
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать MySQL: {e}")
+                return
+
+            while True:
+                try:
+                    await schedule_update_loop()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Фоновое обновление завершилось с ошибкой: {e}")
+                    await asyncio.sleep(30)  # ждём перед повтором
+
+        task = asyncio.create_task(background_tasks())
     else:
-        task = None
         logger.info("⚠️ Фоновая задача отключена")
 
     try:
         yield
     finally:
-        # При shutdown отменяем таск, если он был создан
         if task:
             task.cancel()
             try:

@@ -72,32 +72,4 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 
-	// Добавляем функционал сворачивания длинных текстов
-	document.querySelectorAll('td').forEach(td => {
-		const text = td.textContent.trim();
-		if (text.length > 60) { // если текст длинный
-			td.classList.add('collapsed');
-
-			const textSpan = document.createElement('span');
-			textSpan.className = 'text-content';
-			textSpan.textContent = text;
-
-			td.textContent = '';
-			td.appendChild(textSpan);
-
-			const btn = document.createElement('span');
-			btn.textContent = 'Показать';
-			btn.className = 'expand-btn';
-			btn.style.display = 'block';          // кнопка теперь на новой строке
-			btn.style.marginTop = '5px';          // небольшой отступ сверху
-
-			btn.addEventListener('click', () => {
-				td.classList.toggle('collapsed');
-				td.classList.toggle('expanded');
-				btn.textContent = td.classList.contains('collapsed') ? 'Показать' : 'Скрыть';
-			});
-
-			td.appendChild(btn);
-		}
-	});
 });

@@ -273,6 +273,24 @@ th input[type="submit"] {
     box-shadow: 0 0 10px #000;
 }
 
+table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    /* важно для colgroup */
+}
+
+.col-first {
+    width: auto;
+    /* растягивается на оставшееся пространство */
+}
+
+.col-small {
+    width: 50px;
+    /* минимальная ширина для маленьких чисел */
+    max-width: 50px;
+}
+
 /* ===== Адаптивность ===== */
 @media (max-width: 768px) {
     .add-forms-container {

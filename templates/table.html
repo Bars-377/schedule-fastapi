@@ -23,6 +23,15 @@
 
     <div class="table-container">
         <table>
+            <colgroup>
+                <col class="col-first">
+                {% for metric in metrics %}
+                <col class="col-small">
+                {% endfor %}
+                {% if user.id == 1 %}
+                <col class="col-small">
+                {% endif %}
+            </colgroup>
             <!-- Первая строка: заголовок таблицы -->
             <tr>
                 <th>Отдел ОГКУ "ТО МФЦ"</th>
@@ -189,9 +198,6 @@
     {{ msg }}
 </div>
 
-<script>
-    const hasMsg = {{ 'true' if msg else 'false' }};
-</script>
 <script src="/static/script.js"></script>
 
 </html>

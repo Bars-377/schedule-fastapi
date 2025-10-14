@@ -99,61 +99,82 @@ async def require_edit_permission(user=Depends(require_login)):
 async def recalc(branchdata: BranchData, db: AsyncSession):
     """
     Пересчет всех метрик филиала для последней даты на основе
-    BranchData.value, но сам branchdata не меняется.
+    BranchData.value, без изменения branchdata до успешного расчета.
     """
+    branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
+    if not branchdata_list:
+        return None
 
-    # Получаем все branchdata для этого филиала с последней датой
+    original_values = [Decimal(bd.value) for bd in branchdata_list]
+
+    message, new_values = _calculate_new_values(branchdata, branchdata_list, original_values)
+
+    await _update_db(branchdata_list, new_values, message, db)
+
+    return message
+
+
+async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
     result = await db.execute(
         select(BranchData)
         .where(
-            BranchData.branch_id == branchdata.branch_id,
-            BranchData.record_date == branchdata.record_date,
+            BranchData.branch_id == branch_id,
+            BranchData.record_date == record_date,
         )
-        .order_by(BranchData.metric_id)  # сортировка по id
+        .order_by(BranchData.metric_id)
     )
-    latest_branchdata = result.scalars().all()
+    return result.scalars().all()
 
-    # print(latest_branchdata)
 
-    # latest_branchdata[1].value = float(Decimal("16"))
-    # latest_branchdata[4].value = float(Decimal("6"))
-    # latest_branchdata[5].value = float(Decimal("2"))
-    # # latest_branchdata[6].value = float(Decimal("7.6"))
-    # latest_branchdata[7].value = float(Decimal("72.2"))
+def _calculate_new_values(branchdata: BranchData, branchdata_list, original_values):
+    new_values = {}
+    message = None
 
-    for i, bd in enumerate(latest_branchdata):
+    for i, bd in enumerate(branchdata_list):
         if bd.id == branchdata.id:
-            # Сам branchdata не трогаем
+            new_values[bd.id] = bd.value
             continue
 
-        # --- Формулы зависят от позиции bd в списке ---
-        if i == 2:
-            bd.value = float(
-                Decimal(latest_branchdata[0].value)
-                - Decimal(latest_branchdata[4].value)
-                - Decimal(latest_branchdata[5].value)
-                - Decimal(latest_branchdata[6].value)
-            )
-        elif i == 3:
-            if latest_branchdata[0].value != 0:
-                bd.value = float(
-                    Decimal(latest_branchdata[2].value)
-                    * Decimal("100")
-                    / Decimal(latest_branchdata[0].value)
-                )
+        try:
+            if i == 2:  # 3-я метрика
+                new_values[bd.id] = _calc_metric3(original_values)
+            elif i == 3:  # 4-я метрика
+                new_values[bd.id] = _calc_metric4(original_values)
             else:
-                bd.value = float(Decimal("0"))
+                new_values[bd.id] = bd.value
 
-        # else:
-        #     # Для всех остальных
-        #     bd.value = float(Decimal(latest_branchdata[0].value) \
-        #          * Decimal('2'))
-        # elif i != 6:
-        #     bd.value = float(Decimal("0"))
+        except ValueError as e:
+            message = str(e)
+            break
 
-        db.add(bd)
+    return message, new_values
 
+
+async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
+    if not message:
+        for bd in branchdata_list:
+            bd.value = new_values[bd.id]
+            db.add(bd)
+    else:
+        for i, bd in enumerate(branchdata_list):
+            if i in (0, 2, 3):
+                bd.value = Decimal("0")
     await db.commit()
+
+
+def _calc_metric3(values: list[Decimal]) -> Decimal:
+    """Вычисление 3-й метрики: value0 - value4 - value5 - value6"""
+    result = values[0] - values[4] - values[5] - values[6]
+    if result < 0:
+        raise ValueError("Отрицательное вычисление")
+    return Decimal(result)
+
+
+def _calc_metric4(values: list[Decimal]) -> Decimal:
+    """Вычисление 4-й метрики: (value2 * 100) / value0"""
+    if values[0] == 0:
+        raise ValueError("Делить на 0 нельзя")
+    return Decimal(values[2] * 100 / values[0])
 
 
 # Чтение конфигурации
@@ -367,7 +388,7 @@ async def get_last_date(db: AsyncSession, branch_id: int, metric_id: int):
     return last_date or date.today()
 
 
-def parse_number(value: str) -> float:
+def parse_number(value: str) -> Decimal:
     if not value:
         return 0.0
     # Убираем пробелы
@@ -376,7 +397,7 @@ def parse_number(value: str) -> float:
     value = value.replace(",", ".")
     # Проверяем, есть ли число с помощью регулярки
     if re.fullmatch(r"[+-]?(\d+(\.\d*)?|\.\d+)", value):
-        return float(value)
+        return Decimal(value)
     return 0.0
 
 
@@ -394,7 +415,16 @@ async def update_branchdata(
     value = parse_number(value)
     today = date.today()
 
-    # --- Проверяем, есть ли запись на сегодня ---
+    # --- Получаем последнюю дату для этой ветки, кроме сегодняшней ---
+    result = await db.execute(
+        select(func.max(BranchData.record_date)).where(
+            BranchData.branch_id == branch_id,
+            BranchData.record_date < today
+        )
+    )
+    last_date = result.scalar_one_or_none() or today
+
+    # --- Проверяем, есть ли запись на сегодня для конкретной метрики ---
     result = await db.execute(
         select(BranchData).where(
             BranchData.branch_id == branch_id,
@@ -422,7 +452,7 @@ async def update_branchdata(
         await db.commit()
         await db.refresh(branchdata)
 
-    # --- Создаём недостающие branchdata для всех метрик на сегодняшнюю дату ---
+    # --- Создаём недостающие branchdata для всех метрик на сегодняшнюю дату, копируя значения с последней даты ---
     metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     for metric in metrics:
         result = await db.execute(
@@ -432,19 +462,34 @@ async def update_branchdata(
                 BranchData.record_date == today,
             )
         )
-        if not result.scalar_one_or_none():
+        existing_bd = result.scalar_one_or_none()
+        if not existing_bd:
+            # Берем значение с последней даты
+            result = await db.execute(
+                select(BranchData).where(
+                    BranchData.branch_id == branch_id,
+                    BranchData.metric_id == metric.id,
+                    BranchData.record_date == last_date,
+                )
+            )
+            last_bd = result.scalar_one_or_none()
+            new_value = last_bd.value if last_bd else Decimal("0.0")
+
             new_bd = BranchData(
                 branch_id=branch_id,
                 metric_id=metric.id,
                 record_date=today,
-                value=Decimal("0.0"),
+                value=new_value,
             )
             db.add(new_bd)
     await db.commit()
 
     # --- Пересчёт метрик для филиала ---
-    await recalc(branchdata, db)
+    message = await recalc(branchdata, db)
     await db.refresh(branchdata)
+
+    if message:
+        return RedirectResponse(f"/?page={page}&msg={message}&status=500", status_code=303)
 
     return RedirectResponse(f"/?page={page}&msg=Сохранено&status=200", status_code=303)
 
