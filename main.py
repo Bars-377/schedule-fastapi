@@ -232,9 +232,13 @@ def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int]
             latest_data[key] = bd
     return latest_data
 
-def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
+def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData], ids_aup: set[int]):
     table_data = []
+
     for branch in branches:
+        if branch.department_id in ids_aup:
+            continue  # пропускаем ветки с запрещёнными department_id
+
         row = {
             "branch_id": branch.id,
             "branch_name": branch.name,
@@ -291,7 +295,8 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
     branchdata_rows = await fetch_branchdata(db)
 
     latest_data = build_latest_data(branchdata_rows)
-    table_data = build_table_data(branches, metrics, latest_data)
+    ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+    table_data = build_table_data(branches, metrics, latest_data, ids_aup)
     totals = calculate_totals(total_branches, metrics, latest_data)
     latest_date = find_latest_date(branchdata_rows)
 
