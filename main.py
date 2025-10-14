@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+from collections import defaultdict
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -207,9 +208,14 @@ def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int]
             latest_data[key] = bd
     return latest_data
 
-def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
+
+def build_table_data(branches: list, metrics: list, latest_data: dict, ids_aup: tuple[int], virtual_branch_id: int = 99):
     table_data = []
+
+    # --- Таблица для обычных филиалов (не AUP) ---
     for branch in branches:
+        if branch.department_id in ids_aup:
+            continue  # пропускаем филиалы, которые входят в AUP
         row = {
             "branch_id": branch.id,
             "branch_name": branch.name,
@@ -232,7 +238,41 @@ def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data
                     "metric_id": metric.id,
                 }
         table_data.append(row)
+
+    # --- Создание виртуального суммарного филиала ---
+    # Выбираем только филиалы из ids_aup
+    relevant_branches = [b for b in branches if b.department_id in ids_aup]
+
+    aggregated_metrics = defaultdict(float)
+    latest_dates = {}
+    metric_ids = {}
+
+    for branch in relevant_branches:
+        for metric in metrics:
+            bd = latest_data.get((branch.id, metric.id))
+            if bd:
+                aggregated_metrics[metric.name] += bd.value
+                if (metric.name not in latest_dates) or (bd.record_date > latest_dates[metric.name]):
+                    latest_dates[metric.name] = bd.record_date
+                metric_ids[metric.name] = metric.id
+
+    virtual_row = {
+        "branch_id": virtual_branch_id,
+        "branch_name": "АУП",
+        "metrics": {},
+    }
+
+    for metric_name, value in aggregated_metrics.items():
+        virtual_row["metrics"][metric_name] = {
+            "id": None,
+            "value": value,
+            "record_date": latest_dates.get(metric_name),
+            "metric_id": metric_ids.get(metric_name),
+        }
+
+    table_data.append(virtual_row)
     return table_data
+
 
 def calculate_totals(total_branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
     totals = {}
@@ -266,7 +306,8 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
     branchdata_rows = await fetch_branchdata(db)
 
     latest_data = build_latest_data(branchdata_rows)
-    table_data = build_table_data(branches, metrics, latest_data)
+    ids_aup = (1, 31, 2, 29, 28, 15, 22, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+    table_data = build_table_data(branches, metrics, latest_data, ids_aup)
     totals = calculate_totals(total_branches, metrics, latest_data)
     latest_date = find_latest_date(branchdata_rows)
 

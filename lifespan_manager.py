@@ -175,8 +175,13 @@ async def update_branches(db, departments, metrics):
     for dept in departments:
         name = dept.get("NAME", "").strip()
         department_id = int(dept.get("ID"))
-        if "Отдел" not in name and "РЦТО" not in name:
-            continue
+
+        # ids_aup = (1, 31, 2, 29, 28, 15, 22, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+        # ids_department = (40, 43, 45, 49, 46, 50, 51, 42, 52, 53, 54, 55, 56, 57, 41, 47, 48, 58, 59, 60, 63)
+        # ids_rcto = (32)
+        # ids_tosp = (30)
+        # if "Отдел" not in name and "РЦТО" not in name:
+        #     continue
 
         stmt = select(Branche).where(Branche.department_id == department_id)
         branch = (await db.execute(stmt)).scalar_one_or_none()
