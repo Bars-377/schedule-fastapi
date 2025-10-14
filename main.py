@@ -263,22 +263,21 @@ def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data
         table_data.append(row)
     return table_data
 
-def calculate_totals(total_branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData]):
+
+def calculate_totals(table_data: list[dict], metrics: list[Metric]):
     totals = {}
 
     for metric in metrics:
         total = Decimal("0.00")
-        for branch in total_branches:
-            bd = latest_data.get((branch.id, metric.id))
-            if bd and bd.value is not None:
-                # Преобразуем к Decimal через строку, чтобы избежать ошибок float
-                total += Decimal(str(bd.value))
-
-        # Округляем до двух знаков и сохраняем
+        for row in table_data:
+            metric_info = row["metrics"].get(metric.name)
+            if metric_info and metric_info["value"] is not None:
+                total += Decimal(str(metric_info["value"]))
         total = total.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
         totals[metric.name] = total
 
     return totals
+
 
 def find_latest_date(branchdata_rows: list[BranchData]):
     latest_date = None
@@ -297,7 +296,7 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
     latest_data = build_latest_data(branchdata_rows)
     ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
     table_data = build_table_data(branches, metrics, latest_data, ids_aup)
-    totals = calculate_totals(total_branches, metrics, latest_data)
+    totals = calculate_totals(table_data, metrics)
     latest_date = find_latest_date(branchdata_rows)
 
     return {
