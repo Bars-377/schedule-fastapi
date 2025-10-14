@@ -299,6 +299,9 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
     totals = calculate_totals(table_data, metrics)
     latest_date = find_latest_date(branchdata_rows)
 
+    # передаем список редактируемых метрик из конфига
+    editing_metrics = config.get("editing_metrics", ())
+
     return {
         "request": request,
         "user": user,
@@ -311,6 +314,7 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
         "msg": msg,
         "latest_date": latest_date,
         "totals": totals,
+        "editing": editing_metrics,
     }
 
 
@@ -761,6 +765,48 @@ async def update_metric_id(
 
     return RedirectResponse(
         f"/?page={page}&msg=ID+метрики+обновлен&status=200",
+        status_code=303,
+    )
+
+
+# --- Обновление ID отдела (только для админа) ---
+@app.post("/update_branch_id/{branch_id}")
+async def update_branch_id(
+    branch_id: int,
+    new_id: int = Form(...),
+    page: int = Form(1),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_edit_permission),
+):
+    # Проверка, существует ли отдел с новым ID
+    existing_branch = await db.get(Branche, new_id)
+    if existing_branch:
+        return RedirectResponse(
+            f"/?page={page}&msg=Отдел+с+таким+ID+уже+существует&status=500",
+            status_code=303,
+        )
+
+    branch = await db.get(Branche, branch_id)
+    if not branch:
+        return RedirectResponse(
+            f"/?page={page}&msg=Отдел+не+найден&status=500",
+            status_code=303,
+        )
+
+    # Обновляем все связанные BranchData
+    await db.execute(
+        BranchData.__table__.update()
+        .where(BranchData.branch_id == branch.id)
+        .values(branch_id=new_id)
+    )
+
+    # Обновляем сам отдел
+    branch.id = new_id
+    db.add(branch)
+    await db.commit()
+
+    return RedirectResponse(
+        f"/?page={page}&msg=ID+отдела+обновлен&status=200",
         status_code=303,
     )
 
