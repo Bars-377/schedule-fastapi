@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 # ==============================
 # --- Конфигурация ---
 # ==============================
-with open("config.json") as f:
+with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 
 BITRIX_BASE_URL = "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4"
@@ -74,18 +74,18 @@ async def init_mysql_pool(timeout: int = 10):
 
     while True:
         try:
-            logger.info("[INFO] Подключение к MySQL...")
+            logger.info("Подключение к MySQL...")
             # asyncio.wait_for ограничивает время await
             mysql_pool = await asyncio.wait_for(
                 aiomysql.create_pool(**MYSQL_CONFIG), timeout=timeout
             )
-            logger.info("[OK] Успешное подключение к MySQL")
+            logger.info("Успешное подключение к MySQL")
             return mysql_pool
         except TimeoutError:
-            logger.error(f"[ERROR] Таймаут подключения к MySQL ({timeout} сек)")
+            logger.error(f"Таймаут подключения к MySQL ({timeout} сек)")
         except Exception as e:
             logger.error(
-                f"[ERROR] [{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек..."
+                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек..."
             )
 
         # Ждём перед следующей попыткой
@@ -210,65 +210,98 @@ async def update_branches(db, departments, metrics):
     await db.commit()
 
 
+async def _load_metrics_from_db():
+    """Загружает метрики и возвращает словарь имя_метрики -> id."""
+    async with AsyncSessionLocal() as db:
+        metrics = (await db.execute(select(Metric))).scalars().all()
+    return {m.name.lower(): m.id for m in metrics}
+
+
+def _check_missing_metrics(metric_map, metric_names):
+    """Проверяет, какие метрики отсутствуют, и логирует предупреждение."""
+    missing = [name for name in metric_names.values() if not metric_map.get(name)]
+    if missing:
+        logger.warning(f"Не найдены метрики в таблице Metric: {', '.join(missing)}")
+
+
+async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore):
+    """Обрабатывает одного пользователя и обновляет соответствующие словари."""
+    employee_id = int(user["ID"])
+
+    async with semaphore:
+        absences = await fetch_absences_for_user_async(employee_id)
+        user_info_result = await fetch_user_info(session, employee_id)
+
+    if not user_info_result:
+        return
+
+    user_info = user_info_result[0]
+    is_special_user = user_info.get("UF_USR_1759203471311") == "105"
+
+    dept_id = None
+    if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
+        dept_id_raw = user_info["UF_DEPARTMENT"][0]
+        async with semaphore:
+            dept_id = await fetch_department_info(session, dept_id_raw)
+    if not dept_id:
+        return
+
+    # --- Спецпользователи ---
+    if is_special_user and metric_ids["special"]:
+        special_users.setdefault(dept_id, {}).setdefault(metric_ids["special"], set()).add(employee_id)
+
+    # --- Отпуск / больничный ---
+    for absence in absences:
+        absence_type = absence["ABSENCE_TYPE"]
+        active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
+        active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
+        if not (active_from <= today <= active_to):
+            continue
+
+        if absence_type == "больничный" and metric_ids["sick"]:
+            sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
+        elif absence_type in (
+            "отпуск ежегодный",
+            "отпуск декретный",
+            "отпуск без сохранения заработной платы",
+        ) and metric_ids["vacation"]:
+            all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+
+
 async def process_vacations(session, users):
+    """
+    Получает данные об отсутствии сотрудников и возвращает словари dept_id -> {metric_id: set(employee_ids)}.
+    """
+
+    # --- 1. Загружаем конфиг ---
+    metric_config = config.get("metrics", {})
+    metric_names = {
+        "special": metric_config.get("special", "").lower(),
+        "sick": metric_config.get("sick", "").lower(),
+        "vacation": metric_config.get("vacation", "").lower(),
+    }
+
+    # --- 2. Загружаем метрики ---
+    metric_map = await _load_metrics_from_db()
+    _check_missing_metrics(metric_map, metric_names)
+
+    metric_ids = {
+        "special": metric_map.get(metric_names["special"]),
+        "sick": metric_map.get(metric_names["sick"]),
+        "vacation": metric_map.get(metric_names["vacation"]),
+    }
+
+    # --- 3. Инициализация структур ---
     all_vacations = {}
     sick_leaves = {}
     special_users = {}
+    semaphore = asyncio.Semaphore(10)
 
-    semaphore = asyncio.Semaphore(10)  # ограничиваем количество параллельных запросов
-
-    async def process_user(user):
-        employee_id = int(user["ID"])
-
-        async with semaphore:
-            absences = await fetch_absences_for_user_async(employee_id)
-            user_info_result = await fetch_user_info(session, employee_id)
-
-        if not user_info_result:
-            return
-
-        user_info = user_info_result[0]
-        # print(user_info.get("UF_USR_1759203471311"))
-        is_special_user = user_info.get("UF_USR_1759203471311") == "105"
-
-        # Получаем department_id
-        dept_id = None
-        if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
-            dept_id_raw = user_info["UF_DEPARTMENT"][0]
-            async with semaphore:
-                dept_id = await fetch_department_info(session, dept_id_raw)
-        if not dept_id:
-            return
-
-        # Спецпользователи для метрики 9
-        if is_special_user:
-            special_users.setdefault(dept_id, {}).setdefault(9, set()).add(employee_id)
-
-        for absence in absences:
-            absence_type = absence["ABSENCE_TYPE"]
-            active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
-            active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
-            if not (active_from <= today <= active_to):
-                continue
-
-            if absence_type == "больничный":
-                sick_leaves.setdefault(dept_id, {}).setdefault(14, set()).add(employee_id)
-            elif absence_type in (
-                "отпуск ежегодный",
-                "отпуск декретный",
-                "отпуск без сохранения заработной платы",
-            ):
-                all_vacations.setdefault(dept_id, {}).setdefault(15, set()).add(employee_id)
-
-    # Параллельная обработка всех пользователей
-    await asyncio.gather(*(process_user(u) for u in users))
-
-    # print(sick_leaves)
-    # print('-------------------------')
-    # print(all_vacations)
-    # print('-------------------------')
-    # print(special_users)
-    # print('-------------------------')
+    # --- 4. Обработка пользователей ---
+    await asyncio.gather(*(
+        _process_single_user(u, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore)
+        for u in users
+    ))
 
     return sick_leaves, all_vacations, special_users
 
@@ -280,7 +313,7 @@ async def update_vacations(db, departments_employees):
         )
         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
         if not branch:
-            logger.warning(f"[WARNING] Филиал для department_id={dept_id} не найден")
+            logger.warning(f"Филиал для department_id={dept_id} не найден")
             continue
 
         for metric_id, employees_set in metrics_dict.items():
@@ -323,7 +356,7 @@ async def schedule_update_loop():
             target_time += timedelta(days=1)
         wait_seconds = (target_time - now).total_seconds()
         logger.info(
-            f"[INFO] Следующее обновление через {wait_seconds / 3600:.2f} ч."
+            f"Следующее обновление через {wait_seconds / 3600:.2f} ч."
         )
         await asyncio.sleep(wait_seconds)
 
@@ -363,7 +396,7 @@ async def lifespan(app):
         try:
             await init_mysql_pool()
         except Exception as e:
-            logger.error(f"[ERROR] Не удалось инициализировать MySQL: {e}")
+            logger.error(f"Не удалось инициализировать MySQL: {e}")
 
         while True:
             try:
@@ -372,7 +405,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"[ERROR] Фоновое обновление завершилось с ошибкой: {e}")
+                logger.error(f"Фоновое обновление завершилось с ошибкой: {e}")
                 await asyncio.sleep(30)  # ждём перед повтором
 
     # Запускаем таск **без await**, чтобы FastAPI стартовал сразу
