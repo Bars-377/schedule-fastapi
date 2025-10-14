@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 
 import aiohttp
 import aiomysql
@@ -23,8 +25,8 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 10
-UPDATE_MINUTE = 00
+UPDATE_HOUR = 12
+UPDATE_MINUTE = 17
 
 today = date.today()
 
@@ -176,7 +178,7 @@ async def update_branches(db, departments, metrics):
         name = dept.get("NAME", "").strip()
         department_id = int(dept.get("ID"))
 
-        # ids_aup = (1, 31, 2, 29, 28, 15, 22, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+        # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
         # ids_department = (40, 43, 45, 49, 46, 50, 51, 42, 52, 53, 54, 55, 56, 57, 41, 47, 48, 58, 59, 60, 63)
         # ids_rcto = (32)
         # ids_tosp = (30)
@@ -382,6 +384,80 @@ async def schedule_update_loop():
                 await update_vacations(db, sick_leaves)
                 await update_vacations(db, all_vacations)
                 await update_vacations(db, special_users)
+                # --- Создание / обновление виртуального филиала после background_tasks ---
+                ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+                await ensure_virtual_branch(db, ids_aup)
+                logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
+
+
+async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: int = 99):
+    """
+    Создаёт виртуальный филиал 'АУП', если его нет, или обновляет его данные.
+    virtual_department_id указывается в поле department_id, id остаётся автогенерируемым.
+    """
+    # Проверяем, есть ли филиал с таким department_id
+    stmt = select(Branche).where(Branche.department_id == virtual_department_id)
+    virtual_branch = (await db.execute(stmt)).scalar_one_or_none()
+
+    if not virtual_branch:
+        # Создаём виртуальный филиал
+        virtual_branch = Branche(name="АУП", department_id=virtual_department_id)
+        db.add(virtual_branch)
+        await db.commit()
+        await db.refresh(virtual_branch)
+
+    # Получаем все филиалы и метрики
+    branches = (await db.execute(select(Branche).order_by(Branche.id))).scalars().all()
+    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
+    branchdata_rows = (await db.execute(select(BranchData))).scalars().all()
+
+    # --- Собираем последние значения по филиалам ---
+    latest_data = {}
+    for bd in branchdata_rows:
+        key = (bd.branch_id, bd.metric_id)
+        if key not in latest_data or bd.record_date > latest_data[key].record_date:
+            latest_data[key] = bd
+
+    # --- Агрегация метрик по филиалам AUP ---
+    aggregated_metrics = defaultdict(float)
+    latest_dates = {}
+    metric_ids = {}
+    relevant_branches = [b for b in branches if b.department_id in ids_aup]
+
+    for branch in relevant_branches:
+        for metric in metrics:
+            bd = latest_data.get((branch.id, metric.id))
+            if bd:
+                aggregated_metrics[metric.name] += bd.value
+                if (metric.name not in latest_dates) or (bd.record_date > latest_dates[metric.name]):
+                    latest_dates[metric.name] = bd.record_date
+                metric_ids[metric.name] = metric.id
+
+    # --- Создаём или обновляем BranchData для виртуального филиала ---
+    for metric_name, value in aggregated_metrics.items():
+        metric_id = metric_ids[metric_name]
+        record_date = latest_dates[metric_name] or date.today()
+
+        stmt = select(BranchData).where(
+            BranchData.branch_id == virtual_branch.id,
+            BranchData.metric_id == metric_id,
+            BranchData.record_date == record_date,
+        )
+        bd = (await db.execute(stmt)).scalar_one_or_none()
+        if bd:
+            bd.value = Decimal(str(value)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+            db.add(bd)
+        else:
+            db.add(
+                BranchData(
+                    branch_id=virtual_branch.id,
+                    metric_id=metric_id,
+                    record_date=record_date,
+                    value=Decimal(str(value)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP),
+                )
+            )
+
+    await db.commit()
 
 
 # ==============================
