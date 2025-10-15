@@ -88,6 +88,7 @@
                 {% for row in table_data %}
                 <tr>
                     <td>{{ row.branch_name }}
+                        <br>
                         {% if user.id in (1, 2) %}
                         <form method="post" action="/update_branch_id/{{ row.branch_id }}" style="display:inline-block; margin-left:5px;">
                             <input type="number" name="new_id" value="{{ row.branch_id }}" style="width:50px;">
