@@ -1,3 +1,4 @@
+/* ===== CSS-переменные для кастомизации ===== */
 :root {
     --primary-color: #0066cc;
     --primary-hover: #004999;
@@ -11,8 +12,10 @@
     --box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     --transition-speed: 0.3s;
     --td-max-width: 150px;
+    /* ширина для свернутого текста */
 }
 
+/* ===== Общие стили ===== */
 * {
     box-sizing: border-box;
     margin: 0;
@@ -22,11 +25,8 @@
 body {
     font-family: Arial, sans-serif;
     padding: 20px;
-    background: var(--bg-light);
+    background-color: var(--bg-light);
     color: var(--text-color);
-    display: flex;
-    flex-direction: column;
-    height: 100%;
 }
 
 h2,
@@ -45,40 +45,52 @@ a:hover {
     text-decoration: underline;
 }
 
+/* ===== Универсальные кнопки ===== */
+.button,
 .table-btn,
 .table-btn-del {
     padding: 6px 10px;
+    /* немного меньше паддинг для экономии места */
     border: none;
     border-radius: var(--border-radius);
     font-weight: bold;
     cursor: pointer;
-    transition: background-color var(--transition-speed);
-    margin: 10px 0;
+    transition: background-color var(--transition-speed) ease;
+
+    margin-top: 10px;
+    margin-bottom: 10px;
+
     max-width: 100%;
+    /* не выходит за границы th/td */
     overflow: hidden;
+    /* обрезает содержимое, если не влазит */
     text-overflow: ellipsis;
+    /* показываем многоточие, если не влазит */
     white-space: nowrap;
+    /* текст в одну строку */
     box-sizing: border-box;
+    /* чтобы паддинги учитывались в max-width */
 }
 
 .table-btn {
-    background: var(--primary-color);
+    background-color: var(--primary-color);
     color: #fff;
 }
 
 .table-btn:hover {
-    background: var(--primary-hover);
+    background-color: var(--primary-hover);
 }
 
 .table-btn-del {
-    background: var(--danger-color);
+    background-color: var(--danger-color);
     color: #fff;
 }
 
 .table-btn-del:hover {
-    background: var(--danger-hover);
+    background-color: var(--danger-hover);
 }
 
+/* ===== Формы ===== */
 form {
     background: var(--bg-white);
     padding: 25px 30px;
@@ -100,12 +112,16 @@ form input[type="number"] {
     border-radius: 5px;
 }
 
+/* ===== Контейнер таблицы ===== */
+
 table {
     border-collapse: collapse;
     width: 100%;
-    table-layout: fixed;
     background: var(--bg-white);
+    table-layout: fixed;
+    /* 👈 вот это главное */
     min-width: 600px;
+    /* минимум для маленьких таблиц */
 }
 
 th,
@@ -115,14 +131,24 @@ td {
     text-align: center;
     word-wrap: break-word;
     vertical-align: middle;
-    width: 150px;
 }
 
+/* ===== Заголовки ===== */
 th {
-    background: var(--bg-table-header);
+    background-color: var(--bg-table-header);
     font-weight: bold;
 }
 
+/* ===== Динамическая ширина столбцов ===== */
+th,
+td {
+    width: 150px;
+    /* или auto, если хочешь равномерное распределение */
+    word-wrap: break-word;
+    text-align: center;
+}
+
+/* ===== Текст с возможностью скрытия/раскрытия ===== */
 td .text-content {
     display: block;
     max-width: var(--td-max-width);
@@ -131,12 +157,14 @@ td .text-content {
     white-space: nowrap;
 }
 
+/* ===== Раскрытый текст ===== */
 td.expanded .text-content {
     max-width: 100%;
     white-space: normal;
     word-break: break-word;
 }
 
+/* ===== Кнопка раскрытия текста ===== */
 .expand-btn {
     display: block;
     margin-top: 5px;
@@ -146,6 +174,7 @@ td.expanded .text-content {
     user-select: none;
 }
 
+/* ===== Формы внутри таблицы ===== */
 td form,
 th form {
     margin: 0;
@@ -158,11 +187,18 @@ td input[type="number"],
 th input[type="number"] {
     width: 80px;
     padding: 5px;
+
     max-width: 100%;
+    /* не выходит за границы th/td */
     overflow: hidden;
+    /* обрезает содержимое, если не влазит */
     text-overflow: ellipsis;
+    /* показываем многоточие, если не влазит */
     white-space: nowrap;
+    /* текст в одну строку */
     box-sizing: border-box;
+    /* чтобы паддинги учитывались в max-width */
+
 }
 
 td input[type="submit"],
@@ -171,12 +207,14 @@ th input[type="submit"] {
     font-size: 0.9em;
 }
 
+/* ===== Контейнер добавления отделов/метрик ===== */
 .add-forms-container {
     display: flex;
     justify-content: center;
     gap: 20px;
     flex-wrap: wrap;
-    margin: 20px 0;
+    margin-top: 20px;
+    margin-bottom: 20px;
 }
 
 .add-department-form {
@@ -194,6 +232,7 @@ th input[type="submit"] {
     margin-right: 10px;
 }
 
+/* ===== Пагинация ===== */
 .pagination-form {
     display: flex;
     justify-content: center;
@@ -211,7 +250,7 @@ th input[type="submit"] {
     border-radius: 5px;
     color: var(--primary-color);
     text-decoration: none;
-    transition: background-color var(--transition-speed);
+    transition: background-color var(--transition-speed) ease;
 }
 
 .pagination-form a:hover {
@@ -221,18 +260,14 @@ th input[type="submit"] {
 .pagination-form strong {
     padding: 5px 10px;
     border-radius: 5px;
-    background: var(--primary-color);
+    background-color: var(--primary-color);
     color: #fff;
 }
 
-#overlay,
-#save-msg {
+/* ===== Overlay и сообщение ===== */
+#overlay {
     display: none;
     position: fixed;
-    z-index: 9999;
-}
-
-#overlay {
     top: 0;
     left: 0;
     width: 100%;
@@ -242,6 +277,8 @@ th input[type="submit"] {
 }
 
 #save-msg {
+    display: none;
+    position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
@@ -251,32 +288,58 @@ th input[type="submit"] {
     font-size: 24px;
     font-weight: bold;
     border-radius: var(--border-radius);
+    z-index: 9999;
     box-shadow: 0 0 10px #000;
 }
 
-.table-container {
-    flex: 1 1 auto;
-    overflow: auto;
-    min-height: 750px;
-}
-
-.tableFixHead thead th {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--bg-table-header);
+table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    /* важно для colgroup */
 }
 
 .col-first {
     width: auto;
+    /* растягивается на оставшееся пространство */
 }
 
 .col-small {
     width: 50px;
+    /* минимальная ширина для маленьких чисел */
     max-width: 50px;
 }
 
-@media (max-width:768px) {
+/* === Overlay и сообщение === */
+#overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 9998;
+}
+
+#save-msg {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 128, 0, 0.9);
+    color: white;
+    padding: 20px 40px;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: 10px;
+    z-index: 9999;
+    box-shadow: 0 0 10px #000;
+}
+
+/* ===== Адаптивность ===== */
+@media (max-width: 768px) {
     .add-forms-container {
         flex-direction: column;
         gap: 15px;
@@ -291,6 +354,43 @@ th input[type="submit"] {
     }
 }
 
+html,
+body {
+    height: 100%;
+    /* margin: 0;
+    padding: 0; */
+    display: flex;
+    flex-direction: column;
+}
+
+.table-container {
+    flex: 1 1 auto;
+    /* растягиваем контейнер таблицы на оставшееся место */
+    overflow-x: auto;
+    overflow-y: auto;
+    min-height: 750px;
+    /* Установите минимально допустимую высоту */
+}
+
+.tableFixHead table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.tableFixHead thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-table-header);
+    /* чтобы не просвечивалось содержимое */
+}
+
+.column-header {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .toggle-button {
     margin-left: 5px;
     color: blue;
@@ -299,13 +399,4 @@ th input[type="submit"] {
 
 .full-text {
     margin-top: 5px;
-}
-
-html,
-body {
-    height: 100%;
-    /* margin: 0;
-    padding: 0; */
-    display: flex;
-    flex-direction: column;
 }

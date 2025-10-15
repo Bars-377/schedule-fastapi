@@ -9,6 +9,7 @@
 </head>
 
 <body>
+    <!-- <h2>Таблица отделов</h2> -->
     <p>
         {% if user.username != 'Guest' %}
         Привет, {{ user.username }} |
@@ -32,11 +33,13 @@
                 {% endif %}
             </colgroup>
 
+            <!-- Первая строка: заголовок таблицы -->
             <thead>
                 <tr>
                     <th>Отдел ОГКУ "ТО МФЦ"</th>
                     {% for metric in metrics %}
                     <th>
+
                         {% if metric.name|length > 15 and user.id == 1 %}
                             <span class="short-text">{{ metric.name[:15] }}...</span>
                             <span class="full-text" style="display:none;">{{ metric.name }}</span>
@@ -46,7 +49,8 @@
                         {% endif %}
 
                         {% if user.id in (1, 2) %}
-                        <form method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
+                        <form method="post" action="/update_metric_id/{{ metric.id }}"
+                            style="display:inline-block; margin-left:5px;">
                             <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
                             <input type="submit" value="Сохранить" class="table-btn">
                         </form>
@@ -56,10 +60,10 @@
                     {% if user.id == 1 %}<th>Действие</th>{% endif %}
                 </tr>
             </thead>
-
             <tbody>
+                <!-- Вторая строка: дата поверх всех метрик -->
                 <tr>
-                    <td style="background-color: #e0e0e0;"></td>
+                    <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
                     <td colspan="{{ metrics|length }}">
                         {{ latest_date or '-' }}
                     </td>
@@ -68,9 +72,10 @@
                     {% endif %}
                 </tr>
 
+                <!-- Третья строка: кнопки удаления метрик (только для admin) -->
                 {% if user.id == 1 %}
                 <tr>
-                    <td style="background-color: #e0e0e0;"></td>
+                    <td style="background-color: #e0e0e0;"></td> <!-- пустой первый столбец -->
                     {% for metric in metrics %}
                     <td>
                         {% if not loop.first %}
@@ -81,15 +86,17 @@
                         {% endif %}
                     </td>
                     {% endfor %}
-                    <td style="background-color: #e0e0e0;"></td>
+                    <td style="background-color: #e0e0e0;"></td> <!-- пустой столбец для действия -->
                 </tr>
                 {% endif %}
 
+                <!-- Далее идут строки с данными -->
                 {% for row in table_data %}
                 <tr>
                     <td>{{ row.branch_name }}
                         {% if user.id in (1, 2) %}
-                        <form method="post" action="/update_branch_id/{{ row.branch_id }}" style="display:inline-block; margin-left:5px;">
+                        <form method="post" action="/update_branch_id/{{ row.branch_id }}"
+                            style="display:inline-block; margin-left:5px;">
                             <input type="number" name="new_id" value="{{ row.branch_id }}" style="width:50px;">
                             <input type="submit" value="Сохранить" class="table-btn">
                         </form>
@@ -121,21 +128,25 @@
                     </td>
                     {% endif %}
                 </tr>
+
                 {% endfor %}
 
+                <!-- Строка с суммами -->
                 <tr style="font-weight: bold; background-color: #f0f0f0;">
                     <td>ИТОГО</td>
                     {% for metric in metrics %}
                     <td>{{ totals[metric.name] }}</td>
                     {% endfor %}
                     {% if user.id == 1 %}
-                    <td></td>
+                    <td></td> <!-- пустой столбец для действия -->
                     {% endif %}
                 </tr>
             </tbody>
+
         </table>
     </div>
 
+    <!-- Пагинация -->
     <div class="pagination-form">
         {% if start_page > 1 %}
         <a href='/?page=1'>1</a>
@@ -150,12 +161,12 @@
         {% endif %}
         {% endfor %}
 
-        {% if end_page < total_pages %}
-            {% if end_page < total_pages - 1 %}…{% endif %}
-            <a href='/?page={{ total_pages }}'>{{ total_pages }}</a>
-        {% endif %}
+        {% if end_page < total_pages %} {% if end_page < total_pages - 1 %}…{% endif %} <a
+            href='/?page={{ total_pages }}'>{{ total_pages }}</a>
+            {% endif %}
     </div>
 
+    <!-- Добавление отделов и метрик -->
     {% if user.id == 1 %}
     <div class="add-forms-container">
         <div class="add-department-form">
@@ -177,7 +188,10 @@
     {% endif %}
 </body>
 
+<!-- Overlay -->
 <div id="overlay"></div>
+
+<!-- Сообщение -->
 <div id="save-msg">{{ msg }}</div>
 
 <script>
@@ -197,5 +211,7 @@ function toggleText(button) {
     }
 }
 </script>
+
 <script src="/static/script.js"></script>
+
 </html>
