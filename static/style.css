@@ -291,6 +291,34 @@ table {
     max-width: 50px;
 }
 
+/* === Overlay и сообщение === */
+#overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 9998;
+}
+
+#save-msg {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 128, 0, 0.9);
+    color: white;
+    padding: 20px 40px;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: 10px;
+    z-index: 9999;
+    box-shadow: 0 0 10px #000;
+}
+
 /* ===== Адаптивность ===== */
 @media (max-width: 768px) {
     .add-forms-container {
