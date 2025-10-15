@@ -38,15 +38,16 @@
                     {% for metric in metrics %}
                     <th>
                         {% if metric.name|length > 15 and user.id == 1 %}
-                            <span class="short-text">{{ metric.name[:15] }}...</span>
-                            <span class="full-text" style="display:none;">{{ metric.name }}</span>
-                            <span class="toggle-button" onclick="toggleText(this)">Показать</span>
+                        <span class="short-text">{{ metric.name[:15] }}...</span>
+                        <span class="full-text" style="display:none;">{{ metric.name }}</span>
+                        <span class="toggle-button" onclick="toggleText(this)">Показать</span>
                         {% else %}
-                            {{ metric.name }}
+                        {{ metric.name }}
                         {% endif %}
 
                         {% if user.id in (1, 2) %}
-                        <form method="post" action="/update_metric_id/{{ metric.id }}" style="display:inline-block; margin-left:5px;">
+                        <form method="post" action="/update_metric_id/{{ metric.id }}"
+                            style="display:inline-block; margin-left:5px;">
                             <input type="number" name="new_id" value="{{ metric.id }}" style="width:50px;">
                             <input type="submit" value="Сохранить" class="table-btn">
                         </form>
@@ -61,7 +62,20 @@
                 <tr>
                     <td style="background-color: #e0e0e0;"></td>
                     <td colspan="{{ metrics|length }}">
-                        {{ latest_date or '-' }}
+                        <!-- {{ latest_date or '-' }} -->
+                        <form method="get" action="/">
+                            <label>Выбрать дату:
+                                <select name="date">
+                                    {% for dt in available_dates %}
+                                    <option value="{{ dt }}" {% if dt==selected_date %}selected{% endif %}>
+                                        {{ dt }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </label>
+                            <input type="submit" value="Показать">
+                        </form>
+
                     </td>
                     {% if user.id == 1 %}
                     <td style="background-color: #e0e0e0;"></td>
@@ -90,7 +104,8 @@
                     <td>{{ row.branch_name }}
                         <br>
                         {% if user.id in (1, 2) %}
-                        <form method="post" action="/update_branch_id/{{ row.branch_id }}" style="display:inline-block; margin-left:5px;">
+                        <form method="post" action="/update_branch_id/{{ row.branch_id }}"
+                            style="display:inline-block; margin-left:5px;">
                             <input type="number" name="new_id" value="{{ row.branch_id }}" style="width:50px;">
                             <input type="submit" value="Сохранить" class="table-btn">
                         </form>
@@ -135,68 +150,66 @@
                 </tr>
             </tbody>
         </table>
-    </div>
+        <div class="pagination-form">
+            {% if start_page > 1 %}
+            <a href='/?page=1'>1</a>
+            {% if start_page > 2 %}…{% endif %}
+            {% endif %}
 
-    <div class="pagination-form">
-        {% if start_page > 1 %}
-        <a href='/?page=1'>1</a>
-        {% if start_page > 2 %}…{% endif %}
-        {% endif %}
+            {% for p in range(start_page, end_page + 1) %}
+            {% if p == page %}
+            <strong>{{ p }}</strong>
+            {% else %}
+            <a href='/?page={{ p }}'>{{ p }}</a>
+            {% endif %}
+            {% endfor %}
 
-        {% for p in range(start_page, end_page + 1) %}
-        {% if p == page %}
-        <strong>{{ p }}</strong>
-        {% else %}
-        <a href='/?page={{ p }}'>{{ p }}</a>
-        {% endif %}
-        {% endfor %}
-
-        {% if end_page < total_pages %}
-            {% if end_page < total_pages - 1 %}…{% endif %}
-            <a href='/?page={{ total_pages }}'>{{ total_pages }}</a>
-        {% endif %}
-    </div>
-
-    {% if user.id == 1 %}
-    <div class="add-forms-container">
-        <div class="add-department-form">
-            <h3>Добавить отдел</h3>
-            <form method="post" action="/add">
-                <input type="text" name="name" placeholder="Название отдела" required>
-                <input type="submit" value="Добавить" class="table-btn">
-            </form>
+            {% if end_page < total_pages %} {% if end_page < total_pages - 1 %}…{% endif %} <a
+                href='/?page={{ total_pages }}'>{{ total_pages }}</a>
+                {% endif %}
         </div>
+        {% if user.id == 1 %}
+        <div class="add-forms-container">
+            <div class="add-department-form">
+                <h3>Добавить отдел</h3>
+                <form method="post" action="/add">
+                    <input type="text" name="name" placeholder="Название отдела" required>
+                    <input type="submit" value="Добавить" class="table-btn">
+                </form>
+            </div>
 
-        <div class="add-department-form">
-            <h3>Добавить метрику</h3>
-            <form method="post" action="/add_metric">
-                <input type="text" name="name" placeholder="Название метрики" required>
-                <input type="submit" value="Добавить" class="table-btn">
-            </form>
+            <div class="add-department-form">
+                <h3>Добавить метрику</h3>
+                <form method="post" action="/add_metric">
+                    <input type="text" name="name" placeholder="Название метрики" required>
+                    <input type="submit" value="Добавить" class="table-btn">
+                </form>
+            </div>
         </div>
+        {% endif %}
+        <div id="overlay"></div>
+        <div id="save-msg">{{ msg }}</div>
     </div>
-    {% endif %}
+
 </body>
 
-<div id="overlay"></div>
-<div id="save-msg">{{ msg }}</div>
-
 <script>
-function toggleText(button) {
-    const container = button.parentNode;
-    const shortText = container.querySelector(".short-text");
-    const fullText = container.querySelector(".full-text");
+    function toggleText(button) {
+        const container = button.parentNode;
+        const shortText = container.querySelector(".short-text");
+        const fullText = container.querySelector(".full-text");
 
-    if (fullText.style.display === "none") {
-        fullText.style.display = "inline";
-        shortText.style.display = "none";
-        button.textContent = "Скрыть";
-    } else {
-        fullText.style.display = "none";
-        shortText.style.display = "inline";
-        button.textContent = "Показать";
+        if (fullText.style.display === "none") {
+            fullText.style.display = "inline";
+            shortText.style.display = "none";
+            button.textContent = "Скрыть";
+        } else {
+            fullText.style.display = "none";
+            shortText.style.display = "inline";
+            button.textContent = "Показать";
+        }
     }
-}
 </script>
 <script src="/static/script.js"></script>
+
 </html>

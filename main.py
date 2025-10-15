@@ -279,25 +279,84 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
     return totals
 
 
-def find_latest_date(branchdata_rows: list[BranchData]):
-    latest_date = None
-    for bd in branchdata_rows:
-        if bd.record_date:
-            if latest_date is None or bd.record_date > latest_date:
-                latest_date = bd.record_date
-    return latest_date
+# def find_latest_date(branchdata_rows: list[BranchData]):
+#     latest_date = None
+#     for bd in branchdata_rows:
+#         if bd.record_date:
+#             if latest_date is None or bd.record_date > latest_date:
+#                 latest_date = bd.record_date
+#     return latest_date
 
-# --- Основная функция ---
-async def get_page_data(request: Request, page: int, db: AsyncSession, user: Depends, msg: str):
+
+# --- Основная функция с выбором даты ---
+async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depends(get_current_user), msg: str = None):
+    # Получаем все филиалы с пагинацией
     branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
     metrics = await fetch_metrics(db)
     branchdata_rows = await fetch_branchdata(db)
 
-    latest_data = build_latest_data(branchdata_rows)
     ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
-    table_data = build_table_data(branches, metrics, latest_data, ids_aup)
+
+    # --- Определяем доступные даты ---
+    available_dates = sorted({
+        bd.record_date
+        for bd in branchdata_rows
+        if bd.record_date and bd.branch_id not in ids_aup
+    }, reverse=True)
+
+    # Получаем выбранную дату из запроса
+    selected_date_str = request.query_params.get("date")
+    if selected_date_str:
+        try:
+            selected_date = date.fromisoformat(selected_date_str)
+        except ValueError:
+            selected_date = available_dates[0] if available_dates else date.today()
+    else:
+        selected_date = available_dates[0] if available_dates else date.today()
+
+    # --- Формируем latest_data с учётом выбранной даты ---
+    latest_data = {}
+    for bd in branchdata_rows:
+        key = (bd.branch_id, bd.metric_id)
+        if key not in latest_data or bd.record_date > latest_data[key].record_date:
+            latest_data[key] = bd
+
+    # --- Подбираем данные на выбранную дату, если нет, берём последнюю доступную ---
+    table_data = []
+    for branch in branches:
+        if branch.department_id in ids_aup:
+            continue
+        row = {
+            "branch_id": branch.id,
+            "branch_name": branch.name,
+            "metrics": {},
+        }
+        for metric in metrics:
+            # Сначала ищем bd на выбранную дату
+            bds_for_metric = [bd for bd in branchdata_rows if bd.branch_id == branch.id and bd.metric_id == metric.id]
+            bd_on_selected = next((bd for bd in bds_for_metric if bd.record_date == selected_date), None)
+            if not bd_on_selected:
+                # Если нет, берём последнюю доступную дату
+                bd_on_selected = max(bds_for_metric, key=lambda x: x.record_date, default=None)
+
+            if bd_on_selected:
+                row["metrics"][metric.name] = {
+                    "id": bd_on_selected.id,
+                    "value": bd_on_selected.value,
+                    "record_date": bd_on_selected.record_date,
+                    "metric_id": metric.id,
+                }
+            else:
+                row["metrics"][metric.name] = {
+                    "id": None,
+                    "value": 0,
+                    "record_date": None,
+                    "metric_id": metric.id,
+                }
+        table_data.append(row)
+
+    # --- Рассчёт итогов ---
     totals = calculate_totals(table_data, metrics)
-    latest_date = find_latest_date(branchdata_rows)
 
     # передаем список редактируемых метрик из конфига
     editing_metrics = config.get("editing_metrics", ())
@@ -312,7 +371,9 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user: Dep
         "start_page": start_page,
         "end_page": end_page,
         "msg": msg,
-        "latest_date": latest_date,
+        # "latest_date": available_dates[0] if available_dates else None,
+        "selected_date": selected_date,
+        "available_dates": available_dates,
         "totals": totals,
         "editing": editing_metrics,
     }
@@ -406,7 +467,7 @@ def parse_number(value: str) -> Decimal:
     # Проверяем, есть ли число с помощью регулярки
     if re.fullmatch(r"[+-]?(\d+(\.\d*)?|\.\d+)", value):
         return Decimal(value)
-    return 0.0
+    return Decimal("0.0")
 
 
 # --- Обновление данных филиала через branchdata ---

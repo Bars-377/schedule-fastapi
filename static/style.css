@@ -148,7 +148,7 @@ td.expanded .text-content {
 
 td form,
 th form {
-    margin: 0;
+
     padding: 0;
     background: none;
     box-shadow: none;
@@ -203,6 +203,7 @@ th input[type="submit"] {
     border-radius: var(--border-radius);
     box-shadow: var(--box-shadow);
     margin-top: 20px;
+    margin-bottom: 20px;
 }
 
 .pagination-form a {
@@ -257,13 +258,12 @@ th input[type="submit"] {
 .table-container {
     flex: 1 1 auto;
     overflow: auto;
-    min-height: 750px;
+    min-height: auto;
 }
 
 .tableFixHead {
-    max-height: 600px;
-    /* задаём высоту для прокрутки */
-    overflow-y: auto;
+    height: auto;
+    overflow: visible;
     display: block;
 }
 
