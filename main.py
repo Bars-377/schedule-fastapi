@@ -418,8 +418,7 @@ async def update_branchdata(
         # --- Обновляем существующую запись за сегодня ---
         branchdata.value = Decimal(value)
         db.add(branchdata)
-        await db.commit()
-        await db.refresh(branchdata)
+        await db.flush()  # вместо commit
     else:
         # --- Создаём новую запись с сегодняшней датой ---
         branchdata = BranchData(
@@ -429,8 +428,7 @@ async def update_branchdata(
             value=Decimal(value),
         )
         db.add(branchdata)
-        await db.commit()
-        await db.refresh(branchdata)
+        await db.flush()  # вместо commit
 
     # --- Создаём недостающие branchdata для всех метрик на сегодняшнюю дату, копируя значения с последней даты ---
     metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
@@ -462,10 +460,23 @@ async def update_branchdata(
                 value=new_value,
             )
             db.add(new_bd)
+
     await db.commit()
 
-    # --- Пересчёт метрик для филиала ---
-    message = await recalc(branchdata, db)
+    # # --- Пересчёт метрик для филиала ---
+    # async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
+    #     result = await db.execute(
+    #         select(BranchData)
+    #         .where(
+    #             BranchData.branch_id == branch_id,
+    #             BranchData.record_date == record_date,
+    #         )
+    #         .order_by(BranchData.metric_id)
+    #     )
+    #     return result.scalars().all()
+
+    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
+    message = await recalc(branchdata, db, [branchdata])
     await db.refresh(branchdata)
 
     if message:

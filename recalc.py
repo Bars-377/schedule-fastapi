@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from models import BranchData
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
 
 
 async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
@@ -14,19 +13,19 @@ async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
         for i, bd in enumerate(branchdata_list):
             if i in (0, 2, 3):
                 bd.value = Decimal("0")
-    await db.commit()
+                db.add(bd)
 
 
-async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
-    result = await db.execute(
-        select(BranchData)
-        .where(
-            BranchData.branch_id == branch_id,
-            BranchData.record_date == record_date,
-        )
-        .order_by(BranchData.metric_id)
-    )
-    return result.scalars().all()
+# async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
+#     result = await db.execute(
+#         select(BranchData)
+#         .where(
+#             BranchData.branch_id == branch_id,
+#             BranchData.record_date == record_date,
+#         )
+#         .order_by(BranchData.metric_id)
+#     )
+#     return result.scalars().all()
 
 
 def _calc_metric3(values: list[Decimal]) -> Decimal:
@@ -69,12 +68,12 @@ def _calculate_new_values(branchdata: BranchData, branchdata_list, original_valu
 
 
 # --- Логика вычислений для последней даты всех метрик филиала ---
-async def recalc(branchdata: BranchData, db: AsyncSession):
+async def recalc(branchdata: BranchData, db: AsyncSession, branchdata_list: list):
     """
     Пересчет всех метрик филиала для последней даты на основе
     BranchData.value, без изменения branchdata до успешного расчета.
     """
-    branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
+    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
     if not branchdata_list:
         return None
 
