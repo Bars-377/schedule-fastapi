@@ -232,36 +232,36 @@ def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int]
             latest_data[key] = bd
     return latest_data
 
-def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData], ids_aup: set[int]):
-    table_data = []
+# def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData], ids_aup: set[int]):
+#     table_data = []
 
-    for branch in branches:
-        if branch.department_id in ids_aup:
-            continue  # пропускаем ветки с запрещёнными department_id
+#     for branch in branches:
+#         if branch.department_id in ids_aup:
+#             continue  # пропускаем ветки с запрещёнными department_id
 
-        row = {
-            "branch_id": branch.id,
-            "branch_name": branch.name,
-            "metrics": {},
-        }
-        for metric in metrics:
-            bd = latest_data.get((branch.id, metric.id))
-            if bd:
-                row["metrics"][metric.name] = {
-                    "id": bd.id,
-                    "value": bd.value,
-                    "record_date": bd.record_date,
-                    "metric_id": metric.id,
-                }
-            else:
-                row["metrics"][metric.name] = {
-                    "id": None,
-                    "value": 0,
-                    "record_date": None,
-                    "metric_id": metric.id,
-                }
-        table_data.append(row)
-    return table_data
+#         row = {
+#             "branch_id": branch.id,
+#             "branch_name": branch.name,
+#             "metrics": {},
+#         }
+#         for metric in metrics:
+#             bd = latest_data.get((branch.id, metric.id))
+#             if bd:
+#                 row["metrics"][metric.name] = {
+#                     "id": bd.id,
+#                     "value": bd.value,
+#                     "record_date": bd.record_date,
+#                     "metric_id": metric.id,
+#                 }
+#             else:
+#                 row["metrics"][metric.name] = {
+#                     "id": None,
+#                     "value": 0,
+#                     "record_date": None,
+#                     "metric_id": metric.id,
+#                 }
+#         table_data.append(row)
+#     return table_data
 
 
 def calculate_totals(table_data: list[dict], metrics: list[Metric]):
@@ -288,77 +288,70 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
 #     return latest_date
 
 
-# --- Основная функция с выбором даты ---
-async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depends(get_current_user), msg: str = None):
-    # Получаем все филиалы с пагинацией
-    branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
-    metrics = await fetch_metrics(db)
-    branchdata_rows = await fetch_branchdata(db)
+async def get_available_dates(branchdata_rows: list[BranchData]) -> list[date]:
+    """Возвращает все уникальные даты из branchdata, отсортированные по убыванию"""
+    return sorted({bd.record_date for bd in branchdata_rows if bd.record_date}, reverse=True)
 
-    ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
 
-    # --- Определяем доступные даты ---
-    available_dates = sorted({
-        bd.record_date
-        for bd in branchdata_rows
-        if bd.record_date and bd.branch_id not in ids_aup
-    }, reverse=True)
-
-    # Получаем выбранную дату из запроса
+def select_date(request: Request, available_dates: list[date]) -> date:
+    """Выбирает дату из запроса или берёт последнюю доступную"""
     selected_date_str = request.query_params.get("date")
     if selected_date_str:
         try:
-            selected_date = date.fromisoformat(selected_date_str)
+            return date.fromisoformat(selected_date_str)
         except ValueError:
-            selected_date = available_dates[0] if available_dates else date.today()
-    else:
-        selected_date = available_dates[0] if available_dates else date.today()
+            return available_dates[0] if available_dates else date.today()
+    return available_dates[0] if available_dates else date.today()
 
-    # --- Формируем latest_data с учётом выбранной даты ---
-    latest_data = {}
+
+def build_latest_data_for_date(branchdata_rows: list[BranchData], selected_date: date) -> dict[tuple[int, int], BranchData]:
+    """Возвращает latest_data с учётом выбранной даты"""
+    branchdata_map = {}
     for bd in branchdata_rows:
         key = (bd.branch_id, bd.metric_id)
-        if key not in latest_data or bd.record_date > latest_data[key].record_date:
-            latest_data[key] = bd
+        branchdata_map.setdefault(key, []).append(bd)
 
-    # --- Подбираем данные на выбранную дату, если нет, берём последнюю доступную ---
+    latest_data = {}
+    for key, bds in branchdata_map.items():
+        bd_on_date = next((bd for bd in bds if bd.record_date == selected_date), None)
+        if not bd_on_date:
+            bd_on_date = max(bds, key=lambda x: x.record_date)
+        latest_data[key] = bd_on_date
+    return latest_data
+
+
+def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dict, ids_aup: set[int]):
+    """Строит таблицу для шаблона"""
     table_data = []
     for branch in branches:
         if branch.department_id in ids_aup:
             continue
-        row = {
-            "branch_id": branch.id,
-            "branch_name": branch.name,
-            "metrics": {},
-        }
+        row = {"branch_id": branch.id, "branch_name": branch.name, "metrics": {}}
         for metric in metrics:
-            # Сначала ищем bd на выбранную дату
-            bds_for_metric = [bd for bd in branchdata_rows if bd.branch_id == branch.id and bd.metric_id == metric.id]
-            bd_on_selected = next((bd for bd in bds_for_metric if bd.record_date == selected_date), None)
-            if not bd_on_selected:
-                # Если нет, берём последнюю доступную дату
-                bd_on_selected = max(bds_for_metric, key=lambda x: x.record_date, default=None)
-
-            if bd_on_selected:
-                row["metrics"][metric.name] = {
-                    "id": bd_on_selected.id,
-                    "value": bd_on_selected.value,
-                    "record_date": bd_on_selected.record_date,
-                    "metric_id": metric.id,
-                }
-            else:
-                row["metrics"][metric.name] = {
-                    "id": None,
-                    "value": 0,
-                    "record_date": None,
-                    "metric_id": metric.id,
-                }
+            bd = latest_data.get((branch.id, metric.id))
+            row["metrics"][metric.name] = {
+                "id": bd.id if bd else None,
+                "value": bd.value if bd else 0,
+                "record_date": bd.record_date if bd else None,
+                "metric_id": metric.id,
+            }
         table_data.append(row)
+    return table_data
 
-    # --- Рассчёт итогов ---
+
+# --- Основная функция с выбором даты ---
+async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depends(get_current_user), msg: str = None):
+    branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
+    metrics = await fetch_metrics(db)
+    branchdata_rows = await fetch_branchdata(db)
+
+    ids_aup = {1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18}
+
+    available_dates = await get_available_dates(branchdata_rows)
+    selected_date = select_date(request, available_dates)
+    latest_data = build_latest_data_for_date(branchdata_rows, selected_date)
+    table_data = build_table(branches, metrics, latest_data, ids_aup)
     totals = calculate_totals(table_data, metrics)
-
-    # передаем список редактируемых метрик из конфига
     editing_metrics = config.get("editing_metrics", ())
 
     return {
@@ -371,7 +364,6 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
         "start_page": start_page,
         "end_page": end_page,
         "msg": msg,
-        # "latest_date": available_dates[0] if available_dates else None,
         "selected_date": selected_date,
         "available_dates": available_dates,
         "totals": totals,

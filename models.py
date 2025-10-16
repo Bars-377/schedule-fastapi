@@ -75,8 +75,8 @@ class BranchData(SQLModel, table=True):
             "record_date",
             name="branch_metric_date_unique",
         ),
+        {"extend_existing": True}
     )
-    __table_args__ = {"extend_existing": True}
 
     id: int | None = Field(
         default=None,
