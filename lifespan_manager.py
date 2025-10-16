@@ -1,10 +1,9 @@
 import asyncio
 import json
 import logging
-from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 import aiohttp
 import aiomysql
@@ -12,8 +11,17 @@ from models import AsyncSessionLocal, BranchData, Branche, Metric, engine
 from recalc import recalc
 from sqlmodel import SQLModel, select
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+# ==============================
+# --- Настройка логирования ---
+# ==============================
+logger = logging.getLogger("branch_update")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter(
+    "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+)
+ch = logging.StreamHandler()
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 # ==============================
 # --- Конфигурация ---
@@ -26,9 +34,8 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 10
-UPDATE_MINUTE = 00
-
+UPDATE_HOUR = 13
+UPDATE_MINUTE = 59
 today = date.today()
 
 MYSQL_CONFIG = {
@@ -39,38 +46,31 @@ MYSQL_CONFIG = {
     "charset": config["mysql"]["charset"],
 }
 
-# ==============================
-# --- Глобальный пул MySQL ---
-# ==============================
 mysql_pool: aiomysql.Pool | None = None
-
 
 # ==============================
 # --- Повтор с обработкой ошибок ---
 # ==============================
-async def retry_forever(
-    func, *args, delay: int = 5, name: str = "unknown", **kwargs
-):
+async def retry_forever(func, *args, delay: int = 5, name: str = "unknown", **kwargs):
     attempt = 1
     while True:
         try:
+            # logger.info(f"[{name}] Попытка {attempt} выполнения функции...")
+            # logger.info(f"[{name}] Успешно выполнено после {attempt} попыток")
             return await func(*args, **kwargs)
         except Exception as e:
             logger.error(
-                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка при работе \
-                    с {name}: {e}. Повтор через {delay} сек (попытка {attempt})", exc_info=True
+                f"[{name}] ❌ Ошибка: {e}. Повтор через {delay} сек (попытка {attempt})",
+                exc_info=True
             )
             await asyncio.sleep(delay)
             attempt += 1
 
 
 # ==============================
-# --- Работа с MySQL ---
+# --- MySQL ---
 # ==============================
 async def init_mysql_pool(timeout: int = 10):
-    """
-    Инициализация глобального пула MySQL с ограничением времени подключения.
-    """
     global mysql_pool
     if mysql_pool and not mysql_pool._closed:
         return mysql_pool
@@ -78,24 +78,18 @@ async def init_mysql_pool(timeout: int = 10):
     while True:
         try:
             logger.info("Подключение к MySQL...")
-            # asyncio.wait_for ограничивает время await
-            mysql_pool = await asyncio.wait_for(
-                aiomysql.create_pool(**MYSQL_CONFIG), timeout=timeout
-            )
-            logger.info("Успешное подключение к MySQL")
+            mysql_pool = await asyncio.wait_for(aiomysql.create_pool(**MYSQL_CONFIG), timeout=timeout)
+            logger.info("✅ Успешное подключение к MySQL")
             return mysql_pool
         except TimeoutError:
-            logger.error(f"Таймаут подключения к MySQL ({timeout} сек)")
+            logger.error(f"⏱ Таймаут подключения к MySQL ({timeout} сек)")
         except Exception as e:
-            logger.error(
-                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек...", exc_info=True
-            )
-
-        # Ждём перед следующей попыткой
+            logger.error(f"❌ Ошибка подключения к MySQL: {e}", exc_info=True)
         await asyncio.sleep(5)
 
 
 async def fetch_absences_for_user_async(employee_id: int):
+    # logger.info(f"Запрос отсутствий для сотрудника ID={employee_id}")
     pool = await init_mysql_pool()
     query = """
         SELECT
@@ -123,69 +117,69 @@ async def fetch_absences_for_user_async(employee_id: int):
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(query, (employee_id,))
+                # logger.info(f"Найдено {len(data)} записей об отсутствии для сотрудника ID={employee_id}")
                 return await cursor.fetchall()
 
-    return await retry_forever(_fetch, name="MySQL fetch_absences")
+    return await retry_forever(_fetch, name=f"MySQL fetch_absences ID={employee_id}")
 
 
 # ==============================
-# --- Работа с Bitrix ---
+# --- Bitrix ---
 # ==============================
 async def fetch_json(session, url: str, timeout: int = 10):
     async def _fetch():
         async with session.get(url, timeout=timeout) as resp:
             data = await resp.json()
+            # logger.info(f"Bitrix-запрос {url} завершён, получено {len(data.get('result', []))} элементов")
             return data.get("result", [])
-
     return await retry_forever(_fetch, name=f"Bitrix {url}")
 
-
 async def fetch_departments_from_bitrix(session):
-    url = f"{BITRIX_BASE_URL}/department.get.json"
-    return await fetch_json(session, url)
-
+    logger.info("Загрузка списка отделов из Bitrix...")
+    return await fetch_json(session, f"{BITRIX_BASE_URL}/department.get.json")
 
 async def fetch_users_from_bitrix(session):
+    logger.info("Загрузка списка пользователей из Bitrix...")
     all_users, start, page_size = [], 0, 50
     while True:
-        result = await fetch_json(
-            session, BITRIX_USER_LIST_URL.format(start=start)
-        )
+        result = await fetch_json(session, BITRIX_USER_LIST_URL.format(start=start))
         if not result:
             break
         all_users.extend(result)
         start += page_size
+    logger.info(f"Всего загружено пользователей: {len(all_users)}")
     return all_users
 
 
 async def fetch_user_info(session, employee_id):
-    return await fetch_json(
-        session, BITRIX_USER_INFO_URL.format(user_id=employee_id)
-    )
-
+    # logger.info(f"Загрузка информации о пользователе ID={employee_id}")
+    return await fetch_json(session, BITRIX_USER_INFO_URL.format(user_id=employee_id))
 
 async def fetch_department_info(session, dept_id):
-    result = await fetch_json(
-        session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id)
-    )
+    result = await fetch_json(session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id))
+    # logger.info(f"Информация о департаменте {dept_id}: {dept_info}")
     return result[0]["ID"].strip() if result else None
 
 
 # ==============================
-# --- Обновление данных ---
+# --- BranchData обновление ---
+# ==============================
+async def update_branchdata_value(branchdata: BranchData, value: float, log_prefix: str = ""):
+    old_value = branchdata.value
+    branchdata.value = Decimal(value)
+    logger.info(f"{log_prefix} Обновлено значение BranchData (branch_id={branchdata.branch_id}, metric_id={branchdata.metric_id}): {old_value} -> {value}")
+
+
+# ==============================
+# --- Филиалы и метрики ---
 # ==============================
 async def update_branches(db, departments, metrics):
-    """
-    Обновляет филиалы и создаёт записи BranchData за текущую дату.
-    Редактируемые метрики берут значение из предыдущей даты.
-    Для всех новых записей выполняется recalc.
-    """
-    # Список редактируемых метрик из config.json
-    editing_metric_names = [name.lower() for name in config.get("editing_metrics", [])]
+    editing_metric_names = [n.lower() for n in config.get("editing_metrics", [])]
 
     for dept in departments:
         name = dept.get("NAME", "").strip()
         department_id = int(dept.get("ID"))
+        # logger.info(f"Обработка филиала: {name} (ID={department_id})")
 
         stmt = select(Branche).where(Branche.department_id == department_id)
         branch = (await db.execute(stmt)).scalar_one_or_none()
@@ -194,9 +188,9 @@ async def update_branches(db, departments, metrics):
             db.add(branch)
             await db.commit()
             await db.refresh(branch)
-            logger.info(f"✅ Добавлен филиал: {name}")
+            logger.info(f"✅ Добавлен новый филиал: {name} (ID={department_id})")
 
-        # --- 1. Создаём BranchData за текущую дату для всех метрик ---
+        # Создаём BranchData
         for metric in metrics:
             stmt_check = select(BranchData).where(
                 BranchData.branch_id == branch.id,
@@ -207,40 +201,29 @@ async def update_branches(db, departments, metrics):
 
             if not existing_record:
                 if metric.name.lower() in editing_metric_names:
-                    stmt_prev = (
-                        select(BranchData)
-                        .where(
-                            BranchData.branch_id == branch.id,
-                            BranchData.metric_id == metric.id,
-                            BranchData.record_date < today,
-                        )
-                        .order_by(BranchData.record_date.desc())
-                        .limit(1)
-                    )
+                    stmt_prev = select(BranchData).where(
+                        BranchData.branch_id == branch.id,
+                        BranchData.metric_id == metric.id,
+                        BranchData.record_date < today,
+                    ).order_by(BranchData.record_date.desc()).limit(1)
                     prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
-                    value = prev_record.value if prev_record else 0.0
+                    value = prev_record.value if prev_record else Decimal("0.00")
                 else:
-                    value = 0.0
-
-                branchdata = BranchData(
-                    branch_id=branch.id,
-                    metric_id=metric.id,
-                    record_date=today,
-                    value=Decimal(value),
-                )
+                    value = Decimal("0.00")
+                branchdata = BranchData(branch_id=branch.id, metric_id=metric.id, record_date=today, value=value)
                 db.add(branchdata)
-
-        # --- Сохраняем все новые записи перед recalc ---
+                # logger.info(f"➕ Создан BranchData для филиала {name}, metric {metric.name} -> {value}")
         await db.commit()
 
-        # --- 2. Пересчёт всех метрик филиала за текущую дату ---
+        # Пересчёт метрик
         branchdata_list = (await db.execute(
-            select(BranchData)
-            .where(BranchData.branch_id == branch.id, BranchData.record_date == today)
-            .order_by(BranchData.metric_id)
+            select(BranchData).where(
+                BranchData.branch_id == branch.id,
+                BranchData.record_date == today
+            ).order_by(BranchData.metric_id)
         )).scalars().all()
-
         for bd in branchdata_list:
+            # logger.info(f"Пересчёт метрики branch_id={bd.branch_id}, metric_id={bd.metric_id}")
             await recalc(bd, db)
 
 
@@ -340,15 +323,15 @@ async def process_vacations(session, users):
     return sick_leaves, all_vacations, special_users
 
 
+# Пример для update_vacations:
 async def update_vacations(db, departments_employees):
     for dept_id, metrics_dict in departments_employees.items():
-        stmt_branch = select(Branche).where(
-            Branche.department_id == int(dept_id)
-        )
+        stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
         if not branch:
             logger.warning(f"Филиал для department_id={dept_id} не найден")
             continue
+        logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
 
         for metric_id, employees_set in metrics_dict.items():
             stmt_data = select(BranchData).where(
@@ -356,31 +339,29 @@ async def update_vacations(db, departments_employees):
                 BranchData.metric_id == metric_id,
                 BranchData.record_date == today,
             )
-            branch_data = (await db.execute(stmt_data)).scalar_one_or_none()
-
-            if branch_data:
-                branch_data.value = len(employees_set)
-                logger.info(
-                    f"🔄 Обновлено значение (metric {metric_id}): {branch.name} ({len(employees_set)})"
-                )
+            bd = (await db.execute(stmt_data)).scalar_one_or_none()
+            if bd:
+                await update_branchdata_value(bd, len(employees_set), log_prefix=f"{branch.name}")
             else:
-                db.add(
-                    BranchData(
-                        branch_id=branch.id,
-                        metric_id=metric_id,
-                        record_date=today,
-                        value=len(employees_set),
-                    )
-                )
-                logger.info(
-                    f"✅ Добавлена новая запись (metric {metric_id}): {branch.name} ({len(employees_set)})"
-                )
-
+                bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=len(employees_set))
+                db.add(bd)
+                logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {len(employees_set)}")
     await db.commit()
 
 
+async def get_or_create_virtual_branch(db, virtual_department_id: int = 99, name: str = "АУП"):
+    stmt = select(Branche).where(Branche.department_id == virtual_department_id)
+    branch = (await db.execute(stmt)).scalar_one_or_none()
+    if not branch:
+        branch = Branche(name=name, department_id=virtual_department_id)
+        db.add(branch)
+        await db.commit()
+        await db.refresh(branch)
+    return branch
+
+
 async def schedule_update_loop():
-    await asyncio.sleep(3)
+    await asyncio.sleep(3)  # небольшая задержка перед первым запуском
     while True:
         now = datetime.now()
         target_time = now.replace(
@@ -389,102 +370,110 @@ async def schedule_update_loop():
         if now >= target_time:
             target_time += timedelta(days=1)
         wait_seconds = (target_time - now).total_seconds()
-        logger.info(
-            f"Следующее обновление через {wait_seconds / 3600:.2f} ч."
-        )
+        logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
         await asyncio.sleep(wait_seconds)
 
         async with aiohttp.ClientSession() as session:
+            # --- 1. Загружаем данные из Bitrix ---
             departments = await fetch_departments_from_bitrix(session)
             users = await fetch_users_from_bitrix(session)
 
+            # --- 2. Обновляем обычные филиалы ---
             async with AsyncSessionLocal() as db:
                 metrics = (await db.execute(select(Metric))).scalars().all()
                 await update_branches(db, departments, metrics)
 
-            # print(session)
-            # print(users)
-
+            # --- 3. Обрабатываем отпуска, больничные и спецпользователей ---
             sick_leaves, all_vacations, special_users = await process_vacations(session, users)
 
             async with AsyncSessionLocal() as db:
                 await update_vacations(db, sick_leaves)
                 await update_vacations(db, all_vacations)
                 await update_vacations(db, special_users)
-                # --- Создание / обновление виртуального филиала после background_tasks ---
+
+            # --- 4. Создаём/обновляем виртуальный филиал "АУП" ---
+            async with AsyncSessionLocal() as db:
                 ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
                 await ensure_virtual_branch(db, ids_aup)
                 logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
 
 
-async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: int = 99):
-    """
-    Создаёт виртуальный филиал 'АУП', если его нет, или обновляет его данные.
-    virtual_department_id указывается в поле department_id, id остаётся автогенерируемым.
-    """
-    # Проверяем, есть ли филиал с таким department_id
-    stmt = select(Branche).where(Branche.department_id == virtual_department_id)
-    virtual_branch = (await db.execute(stmt)).scalar_one_or_none()
 
-    if not virtual_branch:
-        # Создаём виртуальный филиал
-        virtual_branch = Branche(name="АУП", department_id=virtual_department_id)
-        db.add(virtual_branch)
-        await db.commit()
-        await db.refresh(virtual_branch)
+# ==============================
+# --- Обновление виртуального филиала "АУП" ---
+# ==============================
+async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: int = 99, name: str = "АУП"):
+    editing_metric_names = [n.lower() for n in config.get("editing_metrics", [])]
+    today_date = date.today()
 
-    # Получаем все филиалы и метрики
-    branches = (await db.execute(select(Branche).order_by(Branche.id))).scalars().all()
-    metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
-    branchdata_rows = (await db.execute(select(BranchData))).scalars().all()
+    # --- Создаём или получаем виртуальный филиал ---
+    virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
 
-    # --- Собираем последние значения по филиалам ---
-    latest_data = {}
-    for bd in branchdata_rows:
-        key = (bd.branch_id, bd.metric_id)
-        if key not in latest_data or bd.record_date > latest_data[key].record_date:
-            latest_data[key] = bd
+    # --- Загружаем все метрики ---
+    metrics = (await db.execute(select(Metric))).scalars().all()
 
-    # --- Агрегация метрик по филиалам AUP ---
-    aggregated_metrics = defaultdict(float)
-    latest_dates = {}
-    metric_ids = {}
-    relevant_branches = [b for b in branches if b.department_id in ids_aup]
+    # --- Загружаем данные всех филиалов ids_aup ---
+    branch_data_map = {}
+    branch_map = {}
+    for branch_dept_id in ids_aup:
+        stmt_branch = select(Branche).where(Branche.department_id == branch_dept_id)
+        branch = (await db.execute(stmt_branch)).scalar_one_or_none()
+        if not branch:
+            continue
+        branch_map[branch_dept_id] = branch
 
-    for branch in relevant_branches:
-        for metric in metrics:
-            bd = latest_data.get((branch.id, metric.id))
-            if bd:
-                aggregated_metrics[metric.name] += bd.value
-                if (metric.name not in latest_dates) or (bd.record_date > latest_dates[metric.name]):
-                    latest_dates[metric.name] = bd.record_date
-                metric_ids[metric.name] = metric.id
+        bd_list = (await db.execute(
+            select(BranchData).where(
+                BranchData.branch_id == branch.id,
+                BranchData.record_date == today_date
+            )
+        )).scalars().all()
 
-    # --- Создаём или обновляем BranchData для виртуального филиала ---
-    for metric_name, value in aggregated_metrics.items():
-        metric_id = metric_ids[metric_name]
-        record_date = latest_dates[metric_name] or date.today()
+        branch_data_map[branch.id] = {bd.metric_id: bd.value for bd in bd_list}
 
-        stmt = select(BranchData).where(
+    # --- Формируем BranchData для виртуального филиала ---
+    branchdata_list = []
+    for metric in metrics:
+        if metric.name.lower() in editing_metric_names:
+            # Для editing_metrics берем значение с предыдущей даты
+            stmt_prev = select(BranchData).where(
+                BranchData.metric_id == metric.id,
+                BranchData.branch_id == virtual_branch.id,
+                BranchData.record_date < today_date
+            ).order_by(BranchData.record_date.desc()).limit(1)
+            prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
+            value = prev_bd.value if prev_bd else Decimal("0.00")
+        else:
+            # Для остальных метрик суммируем по всем филиалам ids_aup
+            value = Decimal("0.00")
+            for branch in branch_map.values():
+                branch_value = branch_data_map.get(branch.id, {}).get(metric.id, 0)
+                value += Decimal(branch_value)
+
+        # Проверяем, есть ли уже запись для виртуального филиала
+        stmt_check = select(BranchData).where(
             BranchData.branch_id == virtual_branch.id,
-            BranchData.metric_id == metric_id,
-            BranchData.record_date == record_date,
+            BranchData.metric_id == metric.id,
+            BranchData.record_date == today_date
         )
-        bd = (await db.execute(stmt)).scalar_one_or_none()
-        if bd:
-            bd.value = Decimal(str(value)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+        bd = (await db.execute(stmt_check)).scalar_one_or_none()
+        if not bd:
+            bd = BranchData(
+                branch_id=virtual_branch.id,
+                metric_id=metric.id,
+                record_date=today_date,
+                value=value
+            )
             db.add(bd)
         else:
-            db.add(
-                BranchData(
-                    branch_id=virtual_branch.id,
-                    metric_id=metric_id,
-                    record_date=record_date,
-                    value=Decimal(str(value)).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP),
-                )
-            )
+            bd.value = value
+        branchdata_list.append(bd)
 
     await db.commit()
+
+    # --- Пересчёт метрик виртуального филиала ---
+    for bd in branchdata_list:
+        await recalc(bd, db)
 
 
 # ==============================
