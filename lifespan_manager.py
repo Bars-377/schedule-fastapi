@@ -9,6 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 import aiohttp
 import aiomysql
 from models import AsyncSessionLocal, BranchData, Branche, Metric, engine
+from recalc import recalc
 from sqlmodel import SQLModel, select
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ async def retry_forever(
         except Exception as e:
             logger.error(
                 f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка при работе \
-                    с {name}: {e}. Повтор через {delay} сек (попытка {attempt})"
+                    с {name}: {e}. Повтор через {delay} сек (попытка {attempt})", exc_info=True
             )
             await asyncio.sleep(delay)
             attempt += 1
@@ -87,7 +88,7 @@ async def init_mysql_pool(timeout: int = 10):
             logger.error(f"Таймаут подключения к MySQL ({timeout} сек)")
         except Exception as e:
             logger.error(
-                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек..."
+                f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Ошибка подключения к MySQL: {e}. Повтор через 5 сек...", exc_info=True
             )
 
         # Ждём перед следующей попыткой
@@ -174,20 +175,20 @@ async def fetch_department_info(session, dept_id):
 # --- Обновление данных ---
 # ==============================
 async def update_branches(db, departments, metrics):
+    """
+    Обновляет филиалы и создаёт записи BranchData за текущую дату.
+    Редактируемые метрики берут значение из предыдущей даты.
+    Для всех новых записей выполняется recalc.
+    """
+    # Список редактируемых метрик из config.json
+    editing_metric_names = [name.lower() for name in config.get("editing_metrics", [])]
+
     for dept in departments:
         name = dept.get("NAME", "").strip()
         department_id = int(dept.get("ID"))
 
-        # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
-        # ids_department = (40, 43, 45, 49, 46, 50, 51, 42, 52, 53, 54, 55, 56, 57, 41, 47, 48, 58, 59, 60, 63)
-        # ids_rcto = (32)
-        # ids_tosp = (30)
-        # if "Отдел" not in name and "РЦТО" not in name:
-        #     continue
-
         stmt = select(Branche).where(Branche.department_id == department_id)
         branch = (await db.execute(stmt)).scalar_one_or_none()
-
         if not branch:
             branch = Branche(name=name, department_id=department_id)
             db.add(branch)
@@ -195,26 +196,52 @@ async def update_branches(db, departments, metrics):
             await db.refresh(branch)
             logger.info(f"✅ Добавлен филиал: {name}")
 
+        # --- 1. Создаём BranchData за текущую дату для всех метрик ---
         for metric in metrics:
             stmt_check = select(BranchData).where(
                 BranchData.branch_id == branch.id,
                 BranchData.metric_id == metric.id,
                 BranchData.record_date == today,
             )
-            existing_record = (
-                await db.execute(stmt_check)
-            ).scalar_one_or_none()
-            if not existing_record:
-                db.add(
-                    BranchData(
-                        branch_id=branch.id,
-                        metric_id=metric.id,
-                        record_date=today,
-                        value=0.0,
-                    )
-                )
+            existing_record = (await db.execute(stmt_check)).scalar_one_or_none()
 
-    await db.commit()
+            if not existing_record:
+                if metric.name.lower() in editing_metric_names:
+                    stmt_prev = (
+                        select(BranchData)
+                        .where(
+                            BranchData.branch_id == branch.id,
+                            BranchData.metric_id == metric.id,
+                            BranchData.record_date < today,
+                        )
+                        .order_by(BranchData.record_date.desc())
+                        .limit(1)
+                    )
+                    prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
+                    value = prev_record.value if prev_record else 0.0
+                else:
+                    value = 0.0
+
+                branchdata = BranchData(
+                    branch_id=branch.id,
+                    metric_id=metric.id,
+                    record_date=today,
+                    value=Decimal(value),
+                )
+                db.add(branchdata)
+
+        # --- Сохраняем все новые записи перед recalc ---
+        await db.commit()
+
+        # --- 2. Пересчёт всех метрик филиала за текущую дату ---
+        branchdata_list = (await db.execute(
+            select(BranchData)
+            .where(BranchData.branch_id == branch.id, BranchData.record_date == today)
+            .order_by(BranchData.metric_id)
+        )).scalars().all()
+
+        for bd in branchdata_list:
+            await recalc(bd, db)
 
 
 async def _load_metrics_from_db():
@@ -479,7 +506,7 @@ async def lifespan(app):
             try:
                 await init_mysql_pool()
             except Exception as e:
-                logger.error(f"Не удалось инициализировать MySQL: {e}")
+                logger.error(f"Не удалось инициализировать MySQL: {e}", exc_info=True)
                 return
 
             while True:
@@ -488,7 +515,7 @@ async def lifespan(app):
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    logger.error(f"Фоновое обновление завершилось с ошибкой: {e}")
+                    logger.error(f"Фоновое обновление завершилось с ошибкой: {e}", exc_info=True)
                     await asyncio.sleep(30)  # ждём перед повтором
 
         task = asyncio.create_task(background_tasks())
