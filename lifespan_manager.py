@@ -1,9 +1,12 @@
 import asyncio
 import json
 import logging
+import smtplib
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from email.message import EmailMessage
+from pathlib import Path
 
 import aiohttp
 import aiomysql
@@ -142,14 +145,18 @@ async def fetch_absences_for_user_async(employee_id: int):
 
 
 # ==============================
-# --- Bitrix ---
+# --- Bitrix с ретраями и семафором ---
 # ==============================
-async def fetch_json(session, url: str, timeout: int = 10):
+BITRIX_SEMAPHORE = asyncio.Semaphore(10)
+BITRIX_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
+
+async def fetch_json(session, url: str):
     async def _fetch():
-        async with session.get(url, timeout=timeout) as resp:
-            data = await resp.json()
-            # logger.info(f"Bitrix-запрос {url} завершён, получено {len(data.get('result', []))} элементов")
-            return data.get("result", [])
+        async with BITRIX_SEMAPHORE:
+            async with session.get(url, timeout=BITRIX_TIMEOUT) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                return data.get("result", [])
     return await retry_forever(_fetch, name=f"Bitrix {url}")
 
 async def fetch_departments_from_bitrix(session):
@@ -261,10 +268,111 @@ def _check_missing_metrics(metric_map, metric_names):
         logger.warning(f"Не найдены метрики в таблице Metric: {', '.join(missing)}")
 
 
+# -------------------------------
+# Асинхронная отправка писем
+# -------------------------------
+async def _send_email_task(message: EmailMessage, smtp_server: str, smtp_port: int, max_attempts: int, retry_delay: int):
+    """Асинхронная обертка для send_email с retry."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await asyncio.to_thread(_send_email_sync, message, smtp_server, smtp_port)
+            logger.info("✅ Письмо успешно отправлено.")
+            return True
+        except smtplib.SMTPException as e:
+            logger.error(f"Попытка {attempt} ❌ Ошибка при отправке письма: {e}")
+            if attempt < max_attempts:
+                await asyncio.sleep(retry_delay)
+    logger.error("❌ Не удалось отправить письмо после всех попыток.")
+    return False
+
+def _send_email_sync(message: EmailMessage, smtp_server: str, smtp_port: int):
+    """Синхронная отправка письма через SMTP."""
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.send_message(message)
+
+async def send_email_async(
+    subject: str,
+    body: str,
+    to: list[str],
+    attachments: list[Path] = None,
+    smtp_server: str = "smtp.mfc.tomsk.ru",
+    smtp_port: int = 25,
+    sender_email: str = "oprgp.toma@mfc.tomsk.ru",
+    max_attempts: int = 3,
+    retry_delay: int = 5
+):
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender_email
+    message["To"] = ", ".join(to)
+    message.set_content(body)
+
+    if attachments:
+        for path in attachments:
+            path = Path(path)
+            if path.exists():
+                with path.open("rb") as f:
+                    message.add_attachment(f.read(),
+                                           maintype="application",
+                                           subtype="octet-stream",
+                                           filename=path.name)
+            else:
+                logger.warning(f"Файл {path} не найден, пропускаем.")
+
+    return await _send_email_task(message, smtp_server, smtp_port, max_attempts, retry_delay)
+
+# -------------------------------
+# Очередь писем и воркеры
+# -------------------------------
+EMAIL_SEMAPHORE = asyncio.Semaphore(1)
+EMAIL_QUEUE: asyncio.Queue[dict] = asyncio.Queue()
+
+async def _email_worker():
+    """Асинхронный воркер для последовательной отправки писем из очереди."""
+    while True:
+        email_task = await EMAIL_QUEUE.get()
+        try:
+            async with EMAIL_SEMAPHORE:
+                await send_email_async(**email_task)
+        except Exception as e:
+            logger.error(f"Ошибка при отправке письма: {e}", exc_info=True)
+        finally:
+            EMAIL_QUEUE.task_done()
+            await asyncio.sleep(2)  # короткая пауза между письмами
+
+async def start_email_workers(n_workers: int = 2):
+    """Запуск воркеров для обработки очереди писем."""
+    for _ in range(n_workers):
+        asyncio.create_task(_email_worker())
+
+async def queue_email(
+    subject: str,
+    body: str,
+    to: list[str],
+    attachments: list[Path] = None,
+    smtp_server: str = "smtp.mfc.tomsk.ru",
+    smtp_port: int = 25,
+    sender_email: str = "oprgp.toma@mfc.tomsk.ru",
+    max_attempts: int = 3,
+    retry_delay: int = 5
+):
+    """Добавляет письмо в очередь на отправку."""
+    await EMAIL_QUEUE.put({
+        "subject": subject,
+        "body": body,
+        "to": to,
+        "attachments": attachments,
+        "smtp_server": smtp_server,
+        "smtp_port": smtp_port,
+        "sender_email": sender_email,
+        "max_attempts": max_attempts,
+        "retry_delay": retry_delay
+    })
+
+
 async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore):
     """Обрабатывает одного пользователя и обновляет соответствующие словари."""
     employee_id = int(user["ID"])
-
     today = date.today()
 
     async with semaphore:
@@ -299,6 +407,17 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
 
         if absence_type == "больничный" and metric_ids["sick"]:
             sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
+
+            if active_from == today:
+                # Отправка письма асинхронно
+                asyncio.create_task(
+                    queue_email(
+                        subject=f"Больничный {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} на больничном с {active_from} по {active_to}",
+                        to=["ms@mfc.tomsk.ru"],
+                    )
+                )
+
         elif absence_type in (
             "отпуск ежегодный",
             "отпуск декретный",
@@ -341,7 +460,6 @@ async def process_vacations(session, users):
     special_users = {}
     semaphore = asyncio.Semaphore(10)
 
-    # Создаём пустые множества для всех метрик
     async with AsyncSessionLocal() as db:
         departments = (await db.execute(select(Branche.department_id))).scalars().all()
         for dept_id in departments:
@@ -356,12 +474,12 @@ async def process_vacations(session, users):
                 if key == "special" and mid:
                     special_users.setdefault(dept_id, {})[mid] = set()
 
-    # --- 4. Обработка пользователей ---
-    async with asyncio.TaskGroup() as tg:
-        for user in users:
-            tg.create_task(_process_single_user(
-                user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore
-            ))
+    # --- 4. Обработка пользователей асинхронно ---
+    tasks = [
+        _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore)
+        for user in users
+    ]
+    await asyncio.gather(*tasks, return_exceptions=True)  # чтобы один баг не прерывал всех
 
     return sick_leaves, all_vacations, special_users
 
@@ -408,19 +526,17 @@ async def get_or_create_virtual_branch(db, virtual_department_id: int = 99, name
 
 
 async def schedule_update_loop():
-    await asyncio.sleep(3)  # небольшая задержка перед первым запуском
+    await asyncio.sleep(3)
     while True:
         now = datetime.now()
-        target_time = now.replace(
-            hour=UPDATE_HOUR, minute=UPDATE_MINUTE, second=0, microsecond=0
-        )
+        target_time = now.replace(hour=UPDATE_HOUR, minute=UPDATE_MINUTE, second=0, microsecond=0)
         if now >= target_time:
             target_time += timedelta(days=1)
         wait_seconds = (target_time - now).total_seconds()
         logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
         await asyncio.sleep(wait_seconds)
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
             # --- 1. Загружаем данные из Bitrix ---
             departments = await fetch_departments_from_bitrix(session)
             users = await fetch_users_from_bitrix(session)
@@ -443,7 +559,6 @@ async def schedule_update_loop():
                 ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
                 await ensure_virtual_branch(db, ids_aup)
                 logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
-
 
 
 # ==============================
@@ -523,6 +638,8 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
 @asynccontextmanager
 async def lifespan(app):
     logger.info(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+    await start_email_workers(n_workers=2)  # или больше, если сервер позволяет
 
     task = None
     if config.get("enable_background_task", True):
