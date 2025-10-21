@@ -412,8 +412,8 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                 # Отправка письма асинхронно
                 asyncio.create_task(
                     queue_email(
-                        subject=f"Больничный {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} на больничном с {active_from} по {active_to}",
+                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to}",
                         to=["ms@mfc.tomsk.ru"],
                     )
                 )
@@ -424,8 +424,29 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
             "отпуск без сохранения заработной платы",
         ) and metric_ids["vacation"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+
+            if active_from == today:
+                # Отправка письма асинхронно
+                asyncio.create_task(
+                    queue_email(
+                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to}",
+                        to=["ms@mfc.tomsk.ru"],
+                    )
+                )
+
         elif not absence_type and metric_ids["absence"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
+
+            if active_from == today:
+                # Отправка письма асинхронно
+                asyncio.create_task(
+                    queue_email(
+                        subject=f"Отсутствие {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - отсутствует с {active_from} по {active_to}",
+                        to=["ms@mfc.tomsk.ru"],
+                    )
+                )
 
 
 async def process_vacations(session, users):
