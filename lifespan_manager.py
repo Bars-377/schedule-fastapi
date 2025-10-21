@@ -305,22 +305,26 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
             "отпуск без сохранения заработной платы",
         ) and metric_ids["vacation"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+        elif not absence_type and metric_ids["absence"]:
+            all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
 
 
 async def process_vacations(session, users):
     """
     Получает данные об отсутствии сотрудников и возвращает словари dept_id -> {metric_id: set(employee_ids)}.
+    Даже если сотрудников нет, метрики будут присутствовать с пустым множеством.
     """
 
-    # --- 1. Загружаем конфиг ---
+    # --- 1. Загружаем конфиг метрик ---
     metric_config = config.get("metrics", {})
     metric_names = {
         "special": metric_config.get("special", "").lower(),
         "sick": metric_config.get("sick", "").lower(),
         "vacation": metric_config.get("vacation", "").lower(),
+        "absence": metric_config.get("absence", "").lower(),
     }
 
-    # --- 2. Загружаем метрики ---
+    # --- 2. Загружаем метрики из БД ---
     metric_map = await _load_metrics_from_db()
     _check_missing_metrics(metric_map, metric_names)
 
@@ -328,13 +332,29 @@ async def process_vacations(session, users):
         "special": metric_map.get(metric_names["special"]),
         "sick": metric_map.get(metric_names["sick"]),
         "vacation": metric_map.get(metric_names["vacation"]),
+        "absence": metric_map.get(metric_names["absence"]),
     }
 
-    # --- 3. Инициализация структур ---
+    # --- 3. Инициализация структур для всех департаментов и метрик ---
     all_vacations = {}
     sick_leaves = {}
     special_users = {}
     semaphore = asyncio.Semaphore(10)
+
+    # Создаём пустые множества для всех метрик
+    async with AsyncSessionLocal() as db:
+        departments = (await db.execute(select(Branche.department_id))).scalars().all()
+        for dept_id in departments:
+            for key, mid in metric_ids.items():
+                if mid is None:
+                    continue
+                if key == "sick":
+                    sick_leaves.setdefault(dept_id, {})[mid] = set()
+                else:
+                    all_vacations.setdefault(dept_id, {})[mid] = set()
+            for key, mid in metric_ids.items():
+                if key == "special" and mid:
+                    special_users.setdefault(dept_id, {})[mid] = set()
 
     # --- 4. Обработка пользователей ---
     async with asyncio.TaskGroup() as tg:
@@ -346,8 +366,10 @@ async def process_vacations(session, users):
     return sick_leaves, all_vacations, special_users
 
 
-# Пример для update_vacations:
 async def update_vacations(db, departments_employees):
+    """
+    Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
+    """
     today = date.today()
     for dept_id, metrics_dict in departments_employees.items():
         stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
@@ -358,6 +380,7 @@ async def update_vacations(db, departments_employees):
         logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
 
         for metric_id, employees_set in metrics_dict.items():
+            value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
             stmt_data = select(BranchData).where(
                 BranchData.branch_id == branch.id,
                 BranchData.metric_id == metric_id,
@@ -365,11 +388,11 @@ async def update_vacations(db, departments_employees):
             )
             bd = (await db.execute(stmt_data)).scalar_one_or_none()
             if bd:
-                await update_branchdata_value(bd, len(employees_set), log_prefix=f"{branch.name}")
+                await update_branchdata_value(bd, value, log_prefix=f"{branch.name}")
             else:
-                bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=len(employees_set))
+                bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=value)
                 db.add(bd)
-                logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {len(employees_set)}")
+                logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {value}")
     await db.commit()
 
 
@@ -437,23 +460,24 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
     # --- 2. Загружаем все метрики ---
     metrics = (await db.execute(select(Metric))).scalars().all()
 
-    # --- 3. Загружаем все филиалы ids_aup и их BranchData одним запросом ---
+    # --- 3. Загружаем все филиалы ids_aup ---
     stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
     branches = (await db.execute(stmt_branches)).scalars().all()
     branch_map = {b.department_id: b for b in branches}
 
+    # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
     stmt_branchdata = select(BranchData).where(
         BranchData.branch_id.in_([b.id for b in branches]),
         BranchData.record_date == today_date
     )
     branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
 
-    # --- 4. Строим словарь branch_id -> metric_id -> value ---
+    # --- 5. Строим словарь branch_id -> metric_id -> value ---
     branch_data_map: dict[int, dict[int, Decimal]] = {}
     for bd in branchdata_list:
         branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
 
-    # --- 5. Формируем BranchData для виртуального филиала ---
+    # --- 6. Формируем BranchData для виртуального филиала ---
     virtual_branchdata_list = []
     for metric in metrics:
         if metric.name.lower() in editing_metric_names:
@@ -466,7 +490,7 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
             prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
             value = prev_bd.value if prev_bd else Decimal("0.00")
         else:
-            # Суммируем по всем филиалам ids_aup из словаря
+            # Суммируем по всем филиалам ids_aup из словаря. Если данных нет, будет 0
             value = sum(
                 branch_data_map.get(branch.id, {}).get(metric.id, Decimal("0.00"))
                 for branch in branch_map.values()
@@ -483,12 +507,12 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
             bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today_date, value=value)
             db.add(bd)
         else:
-            bd.value = value
+            bd.value = value  # Обновляем значение, даже если оно стало 0
         virtual_branchdata_list.append(bd)
 
     await db.commit()
 
-    # --- 6. Пересчёт метрик виртуального филиала ---
+    # --- 7. Пересчёт метрик виртуального филиала ---
     for bd in virtual_branchdata_list:
         await recalc(bd, db, virtual_branchdata_list)
 

@@ -190,7 +190,12 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
         total = Decimal("0.00")
         for row in table_data:
             metric_info = row["metrics"].get(metric.name)
-            if metric_info and metric_info["value"] is not None:
+            if metric_info and metric_info["value"] is not None and "%" in metric.name:
+                if totals["Штатная численность"] != 0:
+                    total = Decimal(totals["Фактическое число работающих (ед.)"] * 100 / totals["Штатная численность"])
+                else:
+                    total = Decimal(0)
+            elif metric_info and metric_info["value"] is not None:
                 total += Decimal(str(metric_info["value"]))
         total = total.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
         totals[metric.name] = total
