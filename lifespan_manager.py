@@ -183,7 +183,7 @@ async def fetch_user_info(session, employee_id):
 async def fetch_department_info(session, dept_id):
     result = await fetch_json(session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id))
     # logger.info(f"Информация о департаменте {dept_id}: {dept_info}")
-    return result[0]["ID"].strip() if result else None
+    return result[0]["ID"].strip() if result else None, result[0]["NAME"].strip() if result else None
 
 
 # ==============================
@@ -389,7 +389,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
     if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
         dept_id_raw = user_info["UF_DEPARTMENT"][0]
         async with semaphore:
-            dept_id = await fetch_department_info(session, dept_id_raw)
+            dept_id, dept_name = await fetch_department_info(session, dept_id_raw)
     if not dept_id:
         return
 
@@ -412,9 +412,10 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                 # Отправка письма асинхронно
                 asyncio.create_task(
                     queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to}",
+                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
                         to=["ms@mfc.tomsk.ru"],
+                        # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
 
@@ -429,9 +430,10 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                 # Отправка письма асинхронно
                 asyncio.create_task(
                     queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to}",
+                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
                         to=["ms@mfc.tomsk.ru"],
+                        # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
 
@@ -442,9 +444,10 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                 # Отправка письма асинхронно
                 asyncio.create_task(
                     queue_email(
-                        subject=f"Отсутствие {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - отсутствует с {active_from} по {active_to}",
+                        subject=f"Отсутствие {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - отсутствует с {active_from} по {active_to} в {dept_name}",
                         to=["ms@mfc.tomsk.ru"],
+                        # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
 
