@@ -414,7 +414,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                     queue_email(
                         subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
                         body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru"],
+                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru"],
                         # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
@@ -432,7 +432,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                     queue_email(
                         subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
                         body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru"],
+                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru"],
                         # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
@@ -446,7 +446,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                     queue_email(
                         subject=f"Отсутствие {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
                         body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - отсутствует с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru"],
+                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru"],
                         # to=["neverov@mfc.tomsk.ru"],
                     )
                 )
