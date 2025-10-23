@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+from collections import defaultdict
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -263,6 +264,40 @@ def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dic
     return table_data
 
 
+async def get_chart_data(db: AsyncSession, metric_map):
+    """Возвращает агрегированные данные для графиков"""
+    branchdata_rows = await fetch_branchdata(db)
+
+    metrics_sums = defaultdict(lambda: defaultdict(float))  # metrics_sums[date][metric_name]
+    all_dates = set()
+
+    for bd in branchdata_rows:
+        date_str = bd.record_date.isoformat()
+        all_dates.add(date_str)
+        metric_name = metric_map.get(bd.metric_id)
+        if metric_name:
+            metrics_sums[date_str][metric_name] += float(bd.value or 0)
+
+    sorted_dates = sorted(all_dates)
+
+    staff = [metrics_sums[d].get("Штатная численность", 0) for d in sorted_dates]
+    sick = [metrics_sums[d].get("Б/л", 0) for d in sorted_dates]
+    vacation = [metrics_sums[d].get("Отпуск", 0) for d in sorted_dates]
+    fact = [metrics_sums[d].get("Фактическое число работающих (ед.)", 0) for d in sorted_dates]
+
+    # Исправленный расчет рабочих: реально работающие = штатная численность - больничные - отпуска
+    working = [max(staff_count - s - v, 0) for staff_count, s, v in zip(fact, sick, vacation, strict=False)]
+
+    return {
+        "dates": sorted_dates,
+        "fact": fact,
+        "sick": sick,
+        "vacation": vacation,
+        "staff": staff,
+        "working": working
+    }
+
+
 # --- Основная функция с выбором даты ---
 async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depends(get_current_user), msg: str = None):
     branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
@@ -278,6 +313,9 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
     totals = calculate_totals(table_data, metrics)
     editing_metrics = config.get("editing_metrics", ())
 
+    metric_map = {m.id: m.name for m in metrics}
+    chart_data = await get_chart_data(db, metric_map)
+
     return {
         "request": request,
         "user": user,
@@ -292,6 +330,7 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
         "available_dates": available_dates,
         "totals": totals,
         "editing": editing_metrics,
+        "chart_data": json.dumps(chart_data),
     }
 
 

@@ -191,8 +191,17 @@
         <div id="save-msg">{{ msg }}</div>
     </div>
 
+    <h3>Графики</h3>
+    <div style="width: 80%; margin: auto;">
+        <canvas id="chartFact" height="200"></canvas>
+    </div>
+    <div style="width: 80%; margin: auto; margin-top: 40px;">
+        <canvas id="chartLeave" height="200"></canvas>
+    </div>
+
 </body>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
     function toggleText(button) {
         const container = button.parentNode;
@@ -209,6 +218,34 @@
             button.textContent = "Показать";
         }
     }
+
+    const chartData = JSON.parse('{{ chart_data | safe }}');
+
+    const ctxFact = document.getElementById("chartFact").getContext("2d");
+    new Chart(ctxFact, {
+        type: "line",
+        data: {
+            labels: chartData.dates,
+            datasets: [
+                { label: "Фактически работающие", data: chartData.working, borderColor: "green", fill: false },
+                { label: "Факт", data: chartData.fact, borderColor: "blue", fill: false },
+                { label: "Штатная численность", data: chartData.staff, borderColor: "orange", fill: false }
+            ]
+        }
+    });
+
+    const ctxLeave = document.getElementById("chartLeave").getContext("2d");
+    new Chart(ctxLeave, {
+        type: "line",
+        data: {
+            labels: chartData.dates,
+            datasets: [
+                { label: "Больничные", data: chartData.sick, borderColor: "red", fill: false },
+                { label: "Отпуск", data: chartData.vacation, borderColor: "purple", fill: false }
+            ]
+        }
+    });
+
 </script>
 <script src="/static/script.js"></script>
 
