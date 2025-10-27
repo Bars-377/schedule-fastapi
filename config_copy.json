@@ -1,0 +1,27 @@
+{
+    "postgresql": {
+        "user": "root",
+        "password": "enigma1418",
+        "host": "172.18.88.41",
+        "database": "mydatabase"
+    },
+    "mysql": {
+        "host": "172.18.10.36",
+        "user": "remote_reader",
+        "password": "#+E;8mCs13^4BpI",
+        "database": "sitemanager",
+        "charset": "utf8"
+    },
+    "enable_background_task": true,
+    "show_all_on_first_page": true,
+    "metrics": {
+        "special": "Количество универсальных специалистов",
+        "sick": "Б/л",
+        "vacation": "Отпуск",
+        "absence": "Отсутствие"
+    },
+    "editing_metrics": [
+        "Штатная численность",
+        "Свободные ставки"
+    ]
+}

@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from models import BranchData
@@ -43,20 +44,67 @@ def _calc_metric4(values: list[Decimal]) -> Decimal:
     return Decimal(values[2] * 100 / values[0])
 
 
-def _calculate_new_values(branchdata: BranchData, branchdata_list, original_values):
+def _calc_metric5(value: Decimal, record_date: date) -> Decimal:
+    """Вычисление 8-й метрики с учётом прогресса по кварталу"""
+
+    # Определяем квартал по дате
+    month = record_date.month
+    year = record_date.year
+
+    if month in (1, 2, 3):  # 1 квартал
+        start = date(year, 1, 1)
+    elif month in (4, 5, 6):  # 2 квартал
+        start = date(year, 4, 1)
+    elif month in (7, 8, 9):  # 3 квартал
+        start = date(year, 7, 1)
+    else:  # 4 квартал
+        start = date(year, 10, 1)
+
+    # if month in (1, 2, 3):  # 1 квартал
+    #     start, end = date(year, 1, 1), date(year, 3, 31)
+    # elif month in (4, 5, 6):  # 2 квартал
+    #     start, end = date(year, 4, 1), date(year, 6, 30)
+    # elif month in (7, 8, 9):  # 3 квартал
+    #     start, end = date(year, 7, 1), date(year, 9, 30)
+    # else:  # 4 квартал
+    #     start, end = date(year, 10, 1), date(year, 12, 31)
+
+    # # Общее количество дней в квартале
+    # total_days_in_quarter = (end - start).days + 1
+
+    # Количество прошедших дней в квартале (включая текущий)
+    days_passed = (record_date - start).days + 1
+
+    # # Доля прошедших дней квартала
+    # progress_ratio = Decimal(days_passed) / Decimal(total_days_in_quarter)
+
+    # # Корректируем values[2] пропорционально прошедшему времени квартала
+    # return Decimal(values[2] * progress_ratio)
+
+    # print(values[2])
+    # print(days_passed)
+
+    # Корректируем values[2] пропорционально прошедшему времени квартала
+    return Decimal(value / days_passed)
+
+
+def _calculate_new_values(branchdata: BranchData, branchdata_list: list, original_values: list):
     new_values = {}
     message = None
 
-    for i, bd in enumerate(branchdata_list):
+    for bd in branchdata_list:
         if bd.id == branchdata.id:
             new_values[bd.id] = bd.value
             continue
 
         try:
-            if i == 2:  # 3-я метрика
+            if bd.metric_id == 3:  # 3-я метрика
                 new_values[bd.id] = _calc_metric3(original_values)
-            elif i == 3:  # 4-я метрика
+                # cache = new_values[bd.id]
+            elif bd.metric_id == 4:  # 4-я метрика
                 new_values[bd.id] = _calc_metric4(original_values)
+            elif bd.metric_id == 8:  # 8-я метрика
+                new_values[bd.id] = _calc_metric5(_calc_metric3(original_values), bd.record_date)
             else:
                 new_values[bd.id] = bd.value
 

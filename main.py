@@ -138,7 +138,8 @@ async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
 
 async def fetch_metrics(db: AsyncSession):
     result = await db.execute(select(Metric).order_by(Metric.id))
-    return result.scalars().all()
+    metrics = result.scalars().all()
+    return [m for m in metrics if m.name.lower() != "отсутствие"]  # <-- фильтрация уже по объектам
 
 async def fetch_branchdata(db: AsyncSession):
     result = await db.execute(select(BranchData))
@@ -507,21 +508,23 @@ async def update_branchdata(
 
     await db.commit()
 
-    # # --- Пересчёт метрик для филиала ---
-    # async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
-    #     result = await db.execute(
-    #         select(BranchData)
-    #         .where(
-    #             BranchData.branch_id == branch_id,
-    #             BranchData.record_date == record_date,
-    #         )
-    #         .order_by(BranchData.metric_id)
-    #     )
-    #     return result.scalars().all()
+    # --- Пересчёт метрик для филиала ---
+    async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
+        result = await db.execute(
+            select(BranchData)
+            .where(
+                BranchData.branch_id == branch_id,
+                BranchData.record_date == record_date,
+            )
+            .order_by(BranchData.metric_id)
+        )
+        return result.scalars().all()
+    branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
+    # print(branchdata_list)
+    # for i in range(2):
+    message = await recalc(branchdata, db, branchdata_list)
 
-    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
-    message = await recalc(branchdata, db, [branchdata])
-    await db.refresh(branchdata)
+    await db.commit()
 
     if message:
         return RedirectResponse(f"/?page={page}&msg={message}&status=500", status_code=303)
