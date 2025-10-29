@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from models import BranchData
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import func, select
 
 
 async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
@@ -17,16 +18,51 @@ async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
                 db.add(bd)
 
 
-# async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
-#     result = await db.execute(
-#         select(BranchData)
-#         .where(
-#             BranchData.branch_id == branch_id,
-#             BranchData.record_date == record_date,
-#         )
-#         .order_by(BranchData.metric_id)
-#     )
-#     return result.scalars().all()
+async def _calc_metric5(branch_id: int, db: AsyncSession, value: Decimal, cache_metric: Decimal):
+    """Вычисление 8-й метрики с учётом прогресса по кварталу"""
+    # Получаем самую старую и самую новую даты
+    dates_query = await db.execute(
+        select(
+            func.min(BranchData.record_date),
+            func.max(BranchData.record_date),
+        ).where(BranchData.branch_id == branch_id)
+    )
+    min_date, max_date = dates_query.one()
+
+    if not max_date:
+        return Decimal(0)
+
+    # Определяем квартал по дате
+    month = max_date.month
+    year = max_date.year
+
+    if month in (1, 2, 3):  # 1 квартал
+        start = date(year, 1, 1)
+    elif month in (4, 5, 6):  # 2 квартал
+        start = date(year, 4, 1)
+    elif month in (7, 8, 9):  # 3 квартал
+        start = date(year, 7, 1)
+    else:  # 4 квартал
+        start = date(year, 10, 1)
+
+    if min_date > start:
+        start = min_date
+
+    # Считаем сумму значений метрики 3 за весь пройденный период квартала
+    sum_query = await db.execute(
+        select(func.sum(BranchData.value))
+        .where(
+            BranchData.branch_id == branch_id,
+            BranchData.metric_id == 3,
+            BranchData.record_date.between(start, max_date),
+        )
+    )
+
+    sum_metric3 = sum_query.scalar() or 0
+    sum_metric3 = Decimal(sum_metric3)
+    days_count = Decimal((max_date - start).days + 1)
+
+    return sum_metric3 / days_count * Decimal(100) / cache_metric
 
 
 def _calc_metric3(values: list[Decimal]) -> Decimal:
@@ -43,54 +79,48 @@ def _calc_metric4(values: list[Decimal]) -> Decimal:
         raise ValueError("Делить на 0 нельзя")
     return Decimal(values[2] * 100 / values[0])
 
+# from datetime import datetime
 
-def _calc_metric5(value: Decimal, record_date: date) -> Decimal:
-    """Вычисление 8-й метрики с учётом прогресса по кварталу"""
+# def _calc_metric5(value: Decimal, cache_metric: Decimal) -> Decimal:
+#     """Вычисление 8-й метрики с учётом прогресса по кварталу"""
 
-    # Определяем квартал по дате
-    month = record_date.month
-    year = record_date.year
-
-    if month in (1, 2, 3):  # 1 квартал
-        start = date(year, 1, 1)
-    elif month in (4, 5, 6):  # 2 квартал
-        start = date(year, 4, 1)
-    elif month in (7, 8, 9):  # 3 квартал
-        start = date(year, 7, 1)
-    else:  # 4 квартал
-        start = date(year, 10, 1)
-
-    # if month in (1, 2, 3):  # 1 квартал
-    #     start, end = date(year, 1, 1), date(year, 3, 31)
-    # elif month in (4, 5, 6):  # 2 квартал
-    #     start, end = date(year, 4, 1), date(year, 6, 30)
-    # elif month in (7, 8, 9):  # 3 квартал
-    #     start, end = date(year, 7, 1), date(year, 9, 30)
-    # else:  # 4 квартал
-    #     start, end = date(year, 10, 1), date(year, 12, 31)
-
-    # # Общее количество дней в квартале
-    # total_days_in_quarter = (end - start).days + 1
-
-    # Количество прошедших дней в квартале (включая текущий)
-    days_passed = (record_date - start).days + 1
-
-    # # Доля прошедших дней квартала
-    # progress_ratio = Decimal(days_passed) / Decimal(total_days_in_quarter)
-
-    # # Корректируем values[2] пропорционально прошедшему времени квартала
-    # return Decimal(values[2] * progress_ratio)
-
-    # print(values[2])
-    # print(days_passed)
-
-    # Корректируем values[2] пропорционально прошедшему времени квартала
-    return Decimal(value / days_passed)
+#     result = await _fetch_branch_stats
 
 
-def _calculate_new_values(branchdata: BranchData, branchdata_list: list, original_values: list):
+
+#     # if month in (1, 2, 3):  # 1 квартал
+#     #     start, end = date(year, 1, 1), date(year, 3, 31)
+#     # elif month in (4, 5, 6):  # 2 квартал
+#     #     start, end = date(year, 4, 1), date(year, 6, 30)
+#     # elif month in (7, 8, 9):  # 3 квартал
+#     #     start, end = date(year, 7, 1), date(year, 9, 30)
+#     # else:  # 4 квартал
+#     #     start, end = date(year, 10, 1), date(year, 12, 31)
+
+#     # # Общее количество дней в квартале
+#     # total_days_in_quarter = (end - start).days + 1
+
+#     # Количество прошедших дней в квартале (включая текущий)
+#     days_passed = (record_date - start).days + 1
+
+#     # # Доля прошедших дней квартала
+#     # progress_ratio = Decimal(days_passed) / Decimal(total_days_in_quarter)
+
+#     # # Корректируем values[2] пропорционально прошедшему времени квартала
+#     # return Decimal(values[2] * progress_ratio)
+
+#     # print(values[2])
+#     # print(days_passed)
+
+#     # Корректируем values[2] пропорционально прошедшему времени квартала
+#     return Decimal(value / days_passed)
+
+
+async def _calculate_new_values(branchdata: BranchData, branchdata_list: list, original_values: list, db: AsyncSession):
     new_values = {}
     message = None
+
+    cache_metric = branchdata_list[0].value
 
     for bd in branchdata_list:
         if bd.id == branchdata.id:
@@ -104,7 +134,7 @@ def _calculate_new_values(branchdata: BranchData, branchdata_list: list, origina
             elif bd.metric_id == 4:  # 4-я метрика
                 new_values[bd.id] = _calc_metric4(original_values)
             elif bd.metric_id == 8:  # 8-я метрика
-                new_values[bd.id] = _calc_metric5(_calc_metric3(original_values), bd.record_date)
+                new_values[bd.id] = await _calc_metric5(bd.branch_id, db, _calc_metric3(original_values), Decimal(cache_metric))
             else:
                 new_values[bd.id] = bd.value
 
@@ -127,7 +157,7 @@ async def recalc(branchdata: BranchData, db: AsyncSession, branchdata_list: list
 
     original_values = [Decimal(bd.value) for bd in branchdata_list]
 
-    message, new_values = _calculate_new_values(branchdata, branchdata_list, original_values)
+    message, new_values = await _calculate_new_values(branchdata, branchdata_list, original_values, db)
 
     await _update_db(branchdata_list, new_values, message, db)
 
