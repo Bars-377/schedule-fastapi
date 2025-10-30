@@ -580,7 +580,8 @@ async def schedule_update_loop():
 
             # --- 4. Создаём/обновляем виртуальный филиал "АУП" ---
             async with AsyncSessionLocal() as db:
-                ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+                ids_aup = set(config.get("ids_aup", []))
+                # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
                 await ensure_virtual_branch(db, ids_aup)
                 logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
 

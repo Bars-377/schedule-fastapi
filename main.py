@@ -305,7 +305,9 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
     metrics = await fetch_metrics(db)
     branchdata_rows = await fetch_branchdata(db)
 
-    ids_aup = {1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18}
+    ids_aup = set(config.get("ids_aup", []))
+
+    # ids_aup = {1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18}
 
     available_dates = await get_available_dates(branchdata_rows)
     selected_date = select_date(request, available_dates)
