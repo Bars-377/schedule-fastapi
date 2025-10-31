@@ -405,7 +405,10 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
         if not (active_from <= today <= active_to):
             continue
 
-        if absence_type == "больничный" and metric_ids["sick"]:
+        if absence_type.lower() in (
+            config["time_off"]["больничный"],
+            config["time_off"]["больничный (дути, родственники)"]
+        ) and metric_ids["sick"]:
             sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
 
             if active_from == today:
@@ -419,33 +422,34 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                     )
                 )
 
-        elif absence_type in (
-            "отпуск ежегодный",
-            "отпуск декретный",
-            "отпуск без сохранения заработной платы",
+        elif absence_type.lower() in (
+            config["time_off"]["отпуск ежегодный"],
+            config["time_off"]["отпуск декретный"],
+            config["time_off"]["отпуск без сохранения заработной платы"],
+            config["time_off"]["отпуск по беременности и родам"]
         ) and metric_ids["vacation"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
 
-            if active_from == today and absence_type == "отпуск ежегодный":
-                # Отправка письма асинхронно
-                asyncio.create_task(
-                    queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-                        # to=["neverov@mfc.tomsk.ru"],
-                    )
-                )
+            # if active_from == today and absence_type == "отпуск ежегодный":
+            #     # Отправка письма асинхронно
+            #     asyncio.create_task(
+            #         queue_email(
+            #             subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+            #             body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
+            #             to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
+            #             # to=["neverov@mfc.tomsk.ru"],
+            #         )
+            #     )
 
-        elif not absence_type and metric_ids["absence"]:
+        elif metric_ids["absence"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
 
             if active_from == today:
                 # Отправка письма асинхронно
                 asyncio.create_task(
                     queue_email(
-                        subject=f"Отсутствие {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - отсутствует с {active_from} по {active_to} в {dept_name}",
+                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
                         to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
                         # to=["neverov@mfc.tomsk.ru"],
                     )
@@ -650,11 +654,11 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
             bd.value = value  # Обновляем значение, даже если оно стало 0
         virtual_branchdata_list.append(bd)
 
-    await db.commit()
-
     # --- 7. Пересчёт метрик виртуального филиала ---
     for bd in virtual_branchdata_list:
         await recalc(bd, db, virtual_branchdata_list)
+
+    await db.commit()
 
 
 # ==============================

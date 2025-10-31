@@ -3,7 +3,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -153,37 +153,6 @@ def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int]
             latest_data[key] = bd
     return latest_data
 
-# def build_table_data(branches: list[Branche], metrics: list[Metric], latest_data: dict[tuple[int, int], BranchData], ids_aup: set[int]):
-#     table_data = []
-
-#     for branch in branches:
-#         if branch.department_id in ids_aup:
-#             continue  # пропускаем ветки с запрещёнными department_id
-
-#         row = {
-#             "branch_id": branch.id,
-#             "branch_name": branch.name,
-#             "metrics": {},
-#         }
-#         for metric in metrics:
-#             bd = latest_data.get((branch.id, metric.id))
-#             if bd:
-#                 row["metrics"][metric.name] = {
-#                     "id": bd.id,
-#                     "value": bd.value,
-#                     "record_date": bd.record_date,
-#                     "metric_id": metric.id,
-#                 }
-#             else:
-#                 row["metrics"][metric.name] = {
-#                     "id": None,
-#                     "value": 0,
-#                     "record_date": None,
-#                     "metric_id": metric.id,
-#                 }
-#         table_data.append(row)
-#     return table_data
-
 
 def calculate_totals(table_data: list[dict], metrics: list[Metric]):
     totals = {}
@@ -202,16 +171,12 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
         total = total.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
         totals[metric.name] = total
 
+    # Среднее значение по "Квартал Боевая численность"
+    if "Квартал Боевая численность" in totals and len(table_data) > 0:
+        avg_value = totals["Квартал Боевая численность"] / Decimal(len(table_data))
+        totals["Квартал Боевая численность"] = avg_value.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+
     return totals
-
-
-# def find_latest_date(branchdata_rows: list[BranchData]):
-#     latest_date = None
-#     for bd in branchdata_rows:
-#         if bd.record_date:
-#             if latest_date is None or bd.record_date > latest_date:
-#                 latest_date = bd.record_date
-#     return latest_date
 
 
 async def get_available_dates(branchdata_rows: list[BranchData]) -> list[date]:
@@ -266,31 +231,42 @@ def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dic
 
 
 async def get_chart_data(db: AsyncSession, metric_map):
-    """Возвращает агрегированные данные для графиков"""
+    """Возвращает агрегированные данные для графиков за последний месяц"""
     branchdata_rows = await fetch_branchdata(db)
 
-    metrics_sums = defaultdict(lambda: defaultdict(float))  # metrics_sums[date][metric_name]
-    all_dates = set()
+    # metrics_sums[date][metric_name] = сумма значений
+    metrics_sums = defaultdict(lambda: defaultdict(float))
+    date_metrics_present = defaultdict(set)  # какие метрики есть для каждой даты
 
     for bd in branchdata_rows:
         date_str = bd.record_date.isoformat()
-        all_dates.add(date_str)
         metric_name = metric_map.get(bd.metric_id)
         if metric_name:
             metrics_sums[date_str][metric_name] += float(bd.value or 0)
+            date_metrics_present[date_str].add(metric_name)
 
-    sorted_dates = sorted(all_dates)
+    # фильтруем только те даты, где есть все метрики из metric_map
+    required_metrics = set(metric_map.values())
+    all_dates = sorted([
+        d for d, metrics in date_metrics_present.items()
+        if required_metrics.issubset(metrics)
+    ])
 
-    staff = [metrics_sums[d].get("Штатная численность", 0) for d in sorted_dates]
-    sick = [metrics_sums[d].get("Б/л", 0) for d in sorted_dates]
-    vacation = [metrics_sums[d].get("Отпуск", 0) for d in sorted_dates]
-    fact = [metrics_sums[d].get("Фактическое число работающих (ед.)", 0) for d in sorted_dates]
+    # оставляем только даты за последний месяц
+    today = datetime.now().date()
+    month_ago = today - timedelta(days=30)
+    all_dates = [d for d in all_dates if datetime.fromisoformat(d).date() >= month_ago]
 
-    # Исправленный расчет рабочих: реально работающие = штатная численность - больничные - отпуска
-    working = [max(staff_count - s - v, 0) for staff_count, s, v in zip(fact, sick, vacation, strict=False)]
+    staff = [metrics_sums[d].get("Штатная численность", 0) for d in all_dates]
+    sick = [metrics_sums[d].get("Б/л", 0) for d in all_dates]
+    vacation = [metrics_sums[d].get("Отпуск", 0) for d in all_dates]
+    fact = [metrics_sums[d].get("Фактическое число работающих (ед.)", 0) for d in all_dates]
+
+    # Исправленный расчет рабочих: реально работающие = факт - больничные - отпуска
+    working = [max(f - s - v, 0) for f, s, v in zip(fact, sick, vacation, strict=False)]
 
     return {
-        "dates": sorted_dates,
+        "dates": all_dates,
         "fact": fact,
         "sick": sick,
         "vacation": vacation,

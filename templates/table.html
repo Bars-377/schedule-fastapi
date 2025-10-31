@@ -124,7 +124,10 @@
                         </form>
                     </td>
                     {% else %}
-                    <td>{{ metric_data.value }}</td>
+                    <td {% if loop.index==8 and metric_data.value is number and metric_data.value < 80
+                        %}style="background-color: #ffcccc;" {% endif %}>
+                        {{ metric_data.value }}
+                    </td>
                     {% endif %}
                     {% endfor %}
 

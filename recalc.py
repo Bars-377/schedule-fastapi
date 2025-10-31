@@ -18,7 +18,7 @@ async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
                 db.add(bd)
 
 
-async def _calc_metric5(branch_id: int, db: AsyncSession, value: Decimal, cache_metric: Decimal) -> Decimal:
+async def _calc_metric5(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
     """Вычисление 8-й метрики с учётом прогресса по кварталу"""
     # Получаем минимальную и максимальную даты
     dates_query = await db.execute(
@@ -102,7 +102,7 @@ async def _calculate_new_values(branchdata: BranchData, branchdata_list: list, o
             elif bd.metric_id == 4:  # 4-я метрика
                 new_values[bd.id] = _calc_metric4(original_values)
             elif bd.metric_id == 8:  # 8-я метрика
-                new_values[bd.id] = await _calc_metric5(bd.branch_id, db, _calc_metric3(original_values), Decimal(cache_metric))
+                new_values[bd.id] = await _calc_metric5(bd.branch_id, db, Decimal(cache_metric))
             else:
                 new_values[bd.id] = bd.value
 
