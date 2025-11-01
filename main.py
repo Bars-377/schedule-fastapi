@@ -3,7 +3,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -254,8 +254,8 @@ async def get_chart_data(db: AsyncSession, metric_map):
 
     # оставляем только даты за последний месяц
     today = datetime.now().date()
-    month_ago = today - timedelta(days=30)
-    all_dates = [d for d in all_dates if datetime.fromisoformat(d).date() >= month_ago]
+    first_day = today.replace(day=1)
+    all_dates = [d for d in all_dates if datetime.fromisoformat(d).date() >= first_day]
 
     staff = [metrics_sums[d].get("Штатная численность", 0) for d in all_dates]
     sick = [metrics_sums[d].get("Б/л", 0) for d in all_dates]
