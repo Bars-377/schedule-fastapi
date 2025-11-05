@@ -405,10 +405,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
         if not (active_from <= today <= active_to):
             continue
 
-        if absence_type.lower() in (
-            config["time_off"]["больничный"],
-            config["time_off"]["больничный (дути, родственники)"]
-        ) and metric_ids["sick"]:
+        if absence_type.lower() in config["sick_leave"]  and metric_ids["sick"]:
             sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
 
             if active_from == today:
@@ -422,12 +419,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                     )
                 )
 
-        elif absence_type.lower() in (
-            config["time_off"]["отпуск ежегодный"],
-            config["time_off"]["отпуск декретный"],
-            config["time_off"]["отпуск без сохранения заработной платы"],
-            config["time_off"]["отпуск по беременности и родам"]
-        ) and metric_ids["vacation"]:
+        elif absence_type.lower() in config["vacations"] and metric_ids["vacation"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
 
             # if active_from == today and absence_type == "отпуск ежегодный":
