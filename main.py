@@ -484,23 +484,25 @@ async def update_branchdata(
             )
             db.add(new_bd)
 
-    await db.commit()
+    # await db.commit()
 
-    # --- Пересчёт метрик для филиала ---
-    async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
-        result = await db.execute(
-            select(BranchData)
-            .where(
-                BranchData.branch_id == branch_id,
-                BranchData.record_date == record_date,
-            )
-            .order_by(BranchData.metric_id)
-        )
-        return result.scalars().all()
-    branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
+    # # --- Пересчёт метрик для филиала ---
+    # async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
+    #     result = await db.execute(
+    #         select(BranchData)
+    #         .where(
+    #             BranchData.branch_id == branch_id,
+    #             BranchData.record_date == record_date,
+    #         )
+    #         .order_by(BranchData.metric_id)
+    #     )
+    #     return result.scalars().all()
+    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
     # print(branchdata_list)
     # for i in range(2):
-    message = await recalc(branchdata, db, branchdata_list)
+    await db.flush()
+    message = await recalc(db, branchdata.record_date, branchdata.branch_id)
+    # message = await recalc(db, branchdata.record_date)
 
     await db.commit()
 

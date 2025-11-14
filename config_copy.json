@@ -1,15 +1,22 @@
 {
     "postgresql": {
-        "user": "root",
+        "user": "bot",
         "password": "enigma1418",
-        "host": "172.18.88.41",
-        "database": "mydatabase"
+        "host": "172.18.11.104",
+        "database": "timesheet"
     },
     "mysql": {
         "host": "172.18.10.36",
         "user": "remote_reader",
         "password": "#+E;8mCs13^4BpI",
         "database": "sitemanager",
+        "charset": "utf8"
+    },
+    "mysql_mdtomskbot": {
+        "host": "172.18.11.104",
+        "user": "root",
+        "password": "enigma1418",
+        "database": "mdtomskbot",
         "charset": "utf8"
     },
     "enable_background_task": true,
@@ -34,6 +41,10 @@
         "командировка"
     ],
     "editing_metrics": [
+        "Штатная численность",
+        "Свободные ставки"
+    ],
+    "previous_metrics": [
         "Штатная численность",
         "Свободные ставки"
     ],

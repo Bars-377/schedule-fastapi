@@ -32,7 +32,7 @@ logger.addHandler(ch)
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 
-editing_metric_names = [n.lower() for n in config.get("editing_metrics", [])]
+previous_metric_names = [n.lower() for n in config.get("previous_metrics", [])]
 
 BITRIX_BASE_URL = "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4"
 BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID&ORDER=ASC&start={{start}}"
@@ -199,14 +199,13 @@ async def update_branchdata_value(branchdata: BranchData, value: float, log_pref
 # --- Филиалы и метрики ---
 # ==============================
 async def update_branches(db, departments, metrics):
-    global editing_metric_names
+    global previous_metric_names
 
     today = date.today()
 
     for dept in departments:
         name = dept.get("NAME", "").strip()
         department_id = int(dept.get("ID"))
-        # logger.info(f"Обработка филиала: {name} (ID={department_id})")
 
         stmt = select(Branche).where(Branche.department_id == department_id)
         branch = (await db.execute(stmt)).scalar_one_or_none()
@@ -216,7 +215,7 @@ async def update_branches(db, departments, metrics):
             await db.flush()
             logger.info(f"✅ Добавлен новый филиал: {name} (ID={department_id})")
 
-        # Создаём BranchData
+        # Создаём или обновляем BranchData
         for metric in metrics:
             stmt_check = select(BranchData).where(
                 BranchData.branch_id == branch.id,
@@ -225,8 +224,23 @@ async def update_branches(db, departments, metrics):
             )
             existing_record = (await db.execute(stmt_check)).scalar_one_or_none()
 
-            if not existing_record:
-                if metric.name.lower() in editing_metric_names:
+            if existing_record:
+                # Обновляем существующую запись
+                if metric.name.lower() in previous_metric_names:
+                    stmt_prev = select(BranchData).where(
+                        BranchData.branch_id == branch.id,
+                        BranchData.metric_id == metric.id,
+                        BranchData.record_date < today,
+                    ).order_by(BranchData.record_date.desc()).limit(1)
+                    prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
+                    existing_record.value = prev_record.value if prev_record else Decimal("0.00")
+                else:
+                    existing_record.value = Decimal("0.00")
+                db.add(existing_record)
+                # logger.info(f"♻️ Обновлён BranchData для филиала {name}, metric {metric.name} -> {existing_record.value}")
+            else:
+                # Создаём новую запись
+                if metric.name.lower() in previous_metric_names:
                     stmt_prev = select(BranchData).where(
                         BranchData.branch_id == branch.id,
                         BranchData.metric_id == metric.id,
@@ -240,16 +254,20 @@ async def update_branches(db, departments, metrics):
                 db.add(branchdata)
                 # logger.info(f"➕ Создан BranchData для филиала {name}, metric {metric.name} -> {value}")
 
-        # Пересчёт метрик
-        branchdata_list = (await db.execute(
-            select(BranchData).where(
-                BranchData.branch_id == branch.id,
-                BranchData.record_date == today
-            ).order_by(BranchData.metric_id)
-        )).scalars().all()
-        for bd in branchdata_list:
-            # logger.info(f"Пересчёт метрики branch_id={bd.branch_id}, metric_id={bd.metric_id}")
-            await recalc(bd, db, branchdata_list)
+        await db.flush()
+        await recalc(db, today)
+
+        # # Пересчёт метрик
+        # branchdata_list = (await db.execute(
+        #     select(BranchData).where(
+        #         BranchData.branch_id == branch.id,
+        #         BranchData.record_date == today
+        #     )
+        # )).scalars().all()
+
+        # for bd in branchdata_list:
+        #     # logger.info(f"Пересчёт метрики branch_id={bd.branch_id}, metric_id={bd.metric_id}")
+        #     await recalc(bd, db, branchdata_list)
 
     await db.commit()
 
@@ -408,16 +426,16 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
         if absence_type.lower() in config["sick_leave"]  and metric_ids["sick"]:
             sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
 
-            if active_from == today:
-                # Отправка письма асинхронно
-                asyncio.create_task(
-                    queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-                        # to=["neverov@mfc.tomsk.ru"],
-                    )
-                )
+            # if active_from == today:
+            #     # Отправка письма асинхронно
+            #     asyncio.create_task(
+            #         queue_email(
+            #             subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+            #             body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
+            #             to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
+            #             # to=["neverov@mfc.tomsk.ru"],
+            #         )
+            #     )
 
         elif absence_type.lower() in config["vacations"] and metric_ids["vacation"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
@@ -436,16 +454,16 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
         elif metric_ids["absence"]:
             all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
 
-            if active_from == today:
-                # Отправка письма асинхронно
-                asyncio.create_task(
-                    queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-                        # to=["neverov@mfc.tomsk.ru"],
-                    )
-                )
+            # if active_from == today:
+            #     # Отправка письма асинхронно
+            #     asyncio.create_task(
+            #         queue_email(
+            #             subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
+            #             body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
+            #             to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
+            #             # to=["neverov@mfc.tomsk.ru"],
+            #         )
+            #     )
 
 
 async def process_vacations(session, users):
@@ -581,12 +599,16 @@ async def schedule_update_loop():
                 await ensure_virtual_branch(db, ids_aup)
                 logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
 
+                # today = date.today()
+                # await db.flush()
+                # await recalc(db, today)
+
 
 # ==============================
 # --- Обновление виртуального филиала "АУП" ---
 # ==============================
 async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: int = 99, name: str = "АУП"):
-    global editing_metric_names
+    global previous_metric_names
 
     today_date = date.today()
 
@@ -616,7 +638,7 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
     # --- 6. Формируем BranchData для виртуального филиала ---
     virtual_branchdata_list = []
     for metric in metrics:
-        if metric.name.lower() in editing_metric_names:
+        if metric.name.lower() in previous_metric_names:
             # Для editing_metrics берем значение с предыдущей даты
             stmt_prev = select(BranchData).where(
                 BranchData.metric_id == metric.id,
@@ -646,9 +668,12 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
             bd.value = value  # Обновляем значение, даже если оно стало 0
         virtual_branchdata_list.append(bd)
 
-    # --- 7. Пересчёт метрик виртуального филиала ---
-    for bd in virtual_branchdata_list:
-        await recalc(bd, db, virtual_branchdata_list)
+    # await db.flush()
+    # await recalc(db, today_date, virtual_branch.id)
+
+    # # --- 7. Пересчёт метрик виртуального филиала ---
+    # for bd in virtual_branchdata_list:
+    #     await recalc(bd, db, virtual_branchdata_list)
 
     await db.commit()
 

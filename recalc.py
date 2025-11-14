@@ -13,12 +13,13 @@ async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
             db.add(bd)
     else:
         for i, bd in enumerate(branchdata_list):
-            if i in (0, 2, 3):
+            if i in (0, 2, 3, 7):
+            # if i in (6, 2, 3):
                 bd.value = Decimal("0")
                 db.add(bd)
 
 
-async def _calc_metric5(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
+async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
     """Вычисление 8-й метрики с учётом прогресса по кварталу"""
     # Получаем минимальную и максимальную даты
     dates_query = await db.execute(
@@ -84,14 +85,16 @@ def _calc_metric4(values: list[Decimal]) -> Decimal:
     return Decimal(values[2] * 100 / values[0])
 
 
-async def _calculate_new_values(branchdata: BranchData, branchdata_list: list, original_values: list, db: AsyncSession):
+async def _calculate_new_values(branchdata_id: int, branchdata_list: list, db: AsyncSession):
     new_values = {}
     message = None
 
     cache_metric = branchdata_list[0].value
 
+    original_values = [Decimal(bd.value) for bd in branchdata_list]
+
     for bd in branchdata_list:
-        if bd.id == branchdata.id:
+        if bd.id == branchdata_id:
             new_values[bd.id] = bd.value
             continue
 
@@ -102,7 +105,7 @@ async def _calculate_new_values(branchdata: BranchData, branchdata_list: list, o
             elif bd.metric_id == 4:  # 4-я метрика
                 new_values[bd.id] = _calc_metric4(original_values)
             elif bd.metric_id == 8:  # 8-я метрика
-                new_values[bd.id] = await _calc_metric5(bd.branch_id, db, Decimal(cache_metric))
+                new_values[bd.id] = await _calc_metric8(bd.branch_id, db, Decimal(cache_metric))
             else:
                 new_values[bd.id] = bd.value
 
@@ -114,19 +117,41 @@ async def _calculate_new_values(branchdata: BranchData, branchdata_list: list, o
 
 
 # --- Логика вычислений для последней даты всех метрик филиала ---
-async def recalc(branchdata: BranchData, db: AsyncSession, branchdata_list: list):
+async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = None):
     """
-    Пересчет всех метрик филиала для последней даты на основе
-    BranchData.value, без изменения branchdata до успешного расчета.
+    Пересчет всех метрик филиала для конкретной даты.
+    Если branch_id не указан, пересчитывает для всех филиалов.
     """
-    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
-    if not branchdata_list:
-        return None
+    branch_ids = [branch_id] if branch_id is not None else []
 
-    original_values = [Decimal(bd.value) for bd in branchdata_list]
+    # Если branch_id не передан, получаем все уникальные филиалы с данными на target_date
+    if not branch_ids:
+        result = await db.execute(
+            select(BranchData.branch_id).where(BranchData.record_date == target_date).distinct()
+        )
+        branch_ids = [row[0] for row in result.all()]
 
-    message, new_values = await _calculate_new_values(branchdata, branchdata_list, original_values, db)
+    messages = {}
 
-    await _update_db(branchdata_list, new_values, message, db)
+    for bid in branch_ids:
+        query = await db.execute(
+            select(BranchData)
+            .where(
+                BranchData.branch_id == bid,
+                BranchData.record_date == target_date
+            )
+            .order_by(BranchData.metric_id)
+        )
+        branchdata_list = query.scalars().all()
 
-    return message
+        if not branchdata_list:
+            continue
+
+        message, new_values = await _calculate_new_values(bid, branchdata_list, db)
+        await _update_db(branchdata_list, new_values, message, db)
+        message, new_values = await _calculate_new_values(bid, branchdata_list, db)
+        await _update_db(branchdata_list, new_values, message, db)
+
+        messages[bid] = message
+
+    return {k: v for k, v in messages.items() if v is not None}
