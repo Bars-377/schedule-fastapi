@@ -1,9 +1,10 @@
+import json
 from datetime import date
 from decimal import Decimal
 
-from models import BranchData
+from models import BranchData, Branche
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, select
+from sqlmodel import func, or_, select
 
 
 async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
@@ -126,8 +127,18 @@ async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = No
 
     # Если branch_id не передан, получаем все уникальные филиалы с данными на target_date
     if not branch_ids:
+        # ==============================
+        # --- Конфигурация ---
+        # ==============================
+        with open("config.json", encoding="utf-8") as f:
+            config = json.load(f)
+
+        ids_aup = set(map(int, config.get("ids_aup", [])))  # Приводим к int
+
         result = await db.execute(
-            select(BranchData.branch_id).where(BranchData.record_date == target_date).distinct()
+            select(Branche.id)
+            .where(or_(Branche.department_id.is_(None), ~Branche.department_id.in_(ids_aup)))
+            .distinct()
         )
         branch_ids = [row[0] for row in result.all()]
 

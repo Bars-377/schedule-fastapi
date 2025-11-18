@@ -255,7 +255,7 @@ async def update_branches(db, departments, metrics):
                 # logger.info(f"➕ Создан BranchData для филиала {name}, metric {metric.name} -> {value}")
 
         await db.flush()
-        await recalc(db, today)
+        await recalc(db, today, branch.id)
 
         # # Пересчёт метрик
         # branchdata_list = (await db.execute(
@@ -522,7 +522,37 @@ async def process_vacations(session, users):
     return sick_leaves, all_vacations, special_users
 
 
-async def update_vacations(db, departments_employees):
+# async def update_vacations(db, departments_employees):
+#     """
+#     Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
+#     """
+#     today = date.today()
+#     for dept_id, metrics_dict in departments_employees.items():
+#         stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
+#         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
+#         if not branch:
+#             logger.warning(f"Филиал для department_id={dept_id} не найден")
+#             continue
+#         logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
+
+#         for metric_id, employees_set in metrics_dict.items():
+#             value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
+#             stmt_data = select(BranchData).where(
+#                 BranchData.branch_id == branch.id,
+#                 BranchData.metric_id == metric_id,
+#                 BranchData.record_date == today,
+#             )
+#             bd = (await db.execute(stmt_data)).scalar_one_or_none()
+#             if bd:
+#                 await update_branchdata_value(bd, value, log_prefix=f"{branch.name}")
+#             else:
+#                 bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=value)
+#                 db.add(bd)
+#                 logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {value}")
+#     await db.commit()
+
+
+async def update_vacations(db, departments_employees, condition = False):
     """
     Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
     """
@@ -536,7 +566,10 @@ async def update_vacations(db, departments_employees):
         logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
 
         for metric_id, employees_set in metrics_dict.items():
-            value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
+            if condition:
+                value = list(employees_set)[0] if employees_set else 0
+            else:
+                value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
             stmt_data = select(BranchData).where(
                 BranchData.branch_id == branch.id,
                 BranchData.metric_id == metric_id,
@@ -561,6 +594,78 @@ async def get_or_create_virtual_branch(db, virtual_department_id: int = 99, name
         await db.commit()
         await db.refresh(branch)
     return branch
+
+
+async def staffing_analysis():
+    """
+    Загружает данные из MySQL таблицы staffing_analysis (mysql_mdtomskbot)
+    и возвращает словарь dep_id -> {metric_id: set[float]}, где
+    planned + free → метрика 1, free → метрика 7.
+    Берёт данные за вчерашнюю дату.
+    Для dep_id = 99 суммирует все данные из dep_id = ids_aup.
+    Департаменты из ids_aup в результате не возвращаются.
+    """
+    pool = None
+    try:
+        pool = await aiomysql.create_pool(
+            host=config["mysql_mdtomskbot"]["host"],
+            user=config["mysql_mdtomskbot"]["user"],
+            password=config["mysql_mdtomskbot"]["password"],
+            db=config["mysql_mdtomskbot"]["database"],
+            charset=config["mysql_mdtomskbot"]["charset"],
+            minsize=1,
+            maxsize=5,
+        )
+
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("""
+                    SELECT dep_id, planned, free, date
+                    FROM staffing_analysis
+                """)
+                rows = await cur.fetchall()
+                logger.info("Запрос `SELECT dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
+
+        temp_result: dict[int, dict[int, set[float]]] = {}
+        for row in rows:
+            dep_id = int(row["dep_id"])
+            planned_value = float(row["planned"])
+            free_value = float(row["free"])
+
+            temp_result.setdefault(dep_id, {})
+            # Сумма planned + free
+            temp_result[dep_id].setdefault(1, set()).add(planned_value + free_value)
+            # Только free для метрики 7
+            temp_result[dep_id].setdefault(7, set()).add(free_value)
+
+        # Суммируем данные для dep_id = 99 из dep_id = ids_aup
+        ids_aup = set(config.get("ids_aup", []))
+        sum_planned_free = 0.0
+        sum_free = 0.0
+        for aup_id in ids_aup:
+            if aup_id in temp_result:
+                sum_planned_free += sum(temp_result[aup_id].get(1, set()))
+                sum_free += sum(temp_result[aup_id].get(7, set()))
+
+        # Оставляем только департаменты, которые не в ids_aup
+        result = {
+            dep_id: metrics
+            for dep_id, metrics in temp_result.items()
+            if dep_id not in ids_aup
+        }
+
+        # Добавляем dep_id = 99
+        result[99] = {
+            1: {sum_planned_free},
+            7: {sum_free}
+        }
+
+        return result
+
+    finally:
+        if pool:
+            pool.close()
+            await pool.wait_closed()
 
 
 async def schedule_update_loop():
@@ -588,6 +693,9 @@ async def schedule_update_loop():
             sick_leaves, all_vacations, special_users = await process_vacations(session, users)
 
             async with AsyncSessionLocal() as db:
+
+                await update_vacations(db, await staffing_analysis(), True)
+
                 await update_vacations(db, sick_leaves)
                 await update_vacations(db, all_vacations)
                 await update_vacations(db, special_users)
@@ -599,9 +707,11 @@ async def schedule_update_loop():
                 await ensure_virtual_branch(db, ids_aup)
                 logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
 
-                # today = date.today()
+            async with AsyncSessionLocal() as db:
+                today = date.today()
                 # await db.flush()
-                # await recalc(db, today)
+                await recalc(db, today)
+                await db.commit()
 
 
 # ==============================
