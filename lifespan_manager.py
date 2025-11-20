@@ -39,8 +39,8 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 10
-UPDATE_MINUTE = 00
+UPDATE_HOUR = 11
+UPDATE_MINUTE = 55
 
 MYSQL_CONFIG = {
     "host": config["mysql"]["host"],
@@ -604,6 +604,8 @@ async def staffing_analysis():
     Берёт данные за вчерашнюю дату.
     Для dep_id = 99 суммирует все данные из dep_id = ids_aup.
     Департаменты из ids_aup в результате не возвращаются.
+    Использует dep_id по ключу id_one_c из предыдущих записей.
+    Пропускает записи с dep_id = NULL.
     """
     pool = None
     try:
@@ -617,37 +619,35 @@ async def staffing_analysis():
             maxsize=5,
         )
 
-        # async with pool.acquire() as conn:
-        #     async with conn.cursor(aiomysql.DictCursor) as cur:
-        #         await cur.execute("""
-        #             SELECT dep_id, planned, free, date
-        #             FROM staffing_analysis
-        #         """)
-        #         rows = await cur.fetchall()
-        #         logger.info("Запрос `SELECT dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
-
         yesterday = date.today() - timedelta(days=1)
 
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("""
-                    SELECT dep_id, planned, free, date
+                    SELECT id_one_c, dep_id, planned, free, date
                     FROM staffing_analysis
                     WHERE date = %s
                 """, (yesterday,))
                 rows = await cur.fetchall()
-                logger.info("Запрос `SELECT dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
+                logger.info("Запрос `SELECT id_one_c, dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
+
+        # Сопоставляем id_one_c -> dep_id только если dep_id не NULL
+        id_to_dep = {row["id_one_c"]: int(row["dep_id"])
+                     for row in rows
+                     if row["dep_id"] is not None}
 
         temp_result: dict[int, dict[int, set[float]]] = {}
         for row in rows:
-            dep_id = int(row["dep_id"])
-            planned_value = float(row["planned"])
-            free_value = float(row["free"])
+            id_one_c = row["id_one_c"]
+            dep_id = id_to_dep.get(id_one_c)
+            if dep_id is None:
+                continue  # пропускаем строки без dep_id
+
+            planned_value = float(row["planned"] or 0)
+            free_value = float(row["free"] or 0)
 
             temp_result.setdefault(dep_id, {})
-            # Сумма planned + free
             temp_result[dep_id].setdefault(1, set()).add(planned_value + free_value)
-            # Только free для метрики 7
             temp_result[dep_id].setdefault(7, set()).add(free_value)
 
         # Суммируем данные для dep_id = 99 из dep_id = ids_aup
