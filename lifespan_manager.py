@@ -617,12 +617,24 @@ async def staffing_analysis():
             maxsize=5,
         )
 
+        # async with pool.acquire() as conn:
+        #     async with conn.cursor(aiomysql.DictCursor) as cur:
+        #         await cur.execute("""
+        #             SELECT dep_id, planned, free, date
+        #             FROM staffing_analysis
+        #         """)
+        #         rows = await cur.fetchall()
+        #         logger.info("Запрос `SELECT dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
+
+        yesterday = date.today() - timedelta(days=1)
+
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("""
                     SELECT dep_id, planned, free, date
                     FROM staffing_analysis
-                """)
+                    WHERE date = %s
+                """, (yesterday,))
                 rows = await cur.fetchall()
                 logger.info("Запрос `SELECT dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
 
