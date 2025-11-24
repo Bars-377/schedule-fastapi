@@ -39,8 +39,8 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 11
-UPDATE_MINUTE = 55
+UPDATE_HOUR = 10
+UPDATE_MINUTE = 00
 
 MYSQL_CONFIG = {
     "host": config["mysql"]["host"],

@@ -2,97 +2,108 @@ import json
 from datetime import date
 from decimal import Decimal
 
-from models import BranchData, Branche
+from models import BranchData, Branche, Metric
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, or_, select
 
+# ---------------------------------------------------------
+# ------------------ Вспомогательные функции --------------
+# ---------------------------------------------------------
 
-async def _update_db(branchdata_list, new_values, message, db: AsyncSession):
-    if not message:
-        for bd in branchdata_list:
-            bd.value = new_values[bd.id]
-            db.add(bd)
-    else:
-        for i, bd in enumerate(branchdata_list):
-            if i in (0, 2, 3, 7):
-            # if i in (6, 2, 3):
-                bd.value = Decimal("0")
-                db.add(bd)
+def _quarter_start(dt: date) -> date:
+    """Возвращает дату начала квартала по дате dt."""
+    quarter_month = ((dt.month - 1) // 3) * 3 + 1
+    return date(dt.year, quarter_month, 1)
+
+
+def _calc_metric3(values: dict[str, Decimal]) -> Decimal:
+    """Метрика 3: value0 - value4 - value5 - value6"""
+    result = (
+        values["Штатная численность"]
+        - values["Б/л"]
+        - values["Отпуск"]
+        - values["Свободные ставки"]
+    )
+    if result < 0:
+        raise ValueError("Отрицательное вычисление")
+    return Decimal(result)
+
+
+def _calc_metric4(values: dict[str, Decimal]) -> Decimal:
+    """Метрика 4: (value2 * 100) / value0"""
+    staff = values["Штатная численность"]
+    if staff == 0:
+        raise ValueError("Делить на 0 нельзя")
+    return Decimal(values["Фактическое число работающих (ед.)"] * 100 / staff)
 
 
 async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
-    """Вычисление 8-й метрики с учётом прогресса по кварталу"""
-    # Получаем минимальную и максимальную даты
+    """Метрика 8 — среднее значение метрики 3 с корректировкой на прогресс квартала."""
     dates_query = await db.execute(
         select(func.min(BranchData.record_date), func.max(BranchData.record_date))
         .where(BranchData.branch_id == branch_id)
     )
     min_date, max_date = dates_query.one()
 
-    if not max_date:
+    if not max_date or cache_metric == 0:
         return Decimal(0)
 
-    # Определяем начало квартала по максимальной дате
-    month = max_date.month
-    year = max_date.year
-
-    if month in (1, 2, 3):
-        start = date(year, 1, 1)
-    elif month in (4, 5, 6):
-        start = date(year, 4, 1)
-    elif month in (7, 8, 9):
-        start = date(year, 7, 1)
-    else:
-        start = date(year, 10, 1)
-
-    # Начало учитывает минимальную дату
-    if min_date > start:
+    start = _quarter_start(max_date)
+    if min_date and min_date > start:
         start = min_date
 
-    days_count = (max_date - start).days + 1
-    if days_count <= 0:
+    days = (max_date - start).days + 1
+    if days <= 0:
         return Decimal(0)
 
-    # Считаем сумму метрики 3
     sum_query = await db.execute(
-        select(func.sum(BranchData.value))
-        .where(
+        select(func.sum(BranchData.value)).where(
             BranchData.branch_id == branch_id,
             BranchData.metric_id == 3,
-            BranchData.record_date.between(start, max_date)
+            BranchData.record_date.between(start, max_date),
         )
     )
     sum_metric3 = Decimal(sum_query.scalar() or 0)
 
-    # Проверка cache_metric
-    if cache_metric == 0:
-        return Decimal(0)
-
-    return sum_metric3 / Decimal(days_count) * Decimal(100) / cache_metric
+    return sum_metric3 / Decimal(days) * Decimal(100) / cache_metric
 
 
-def _calc_metric3(values: list[Decimal]) -> Decimal:
-    """Вычисление 3-й метрики: value0 - value4 - value5 - value6"""
-    result = values[0] - values[4] - values[5] - values[6]
-    if result < 0:
-        raise ValueError("Отрицательное вычисление")
-    return Decimal(result)
+# ---------------------------------------------------------
+# -------------------- Логика обновления ------------------
+# ---------------------------------------------------------
+
+async def _apply_updates(branchdata_list, new_values, message, db: AsyncSession):
+    """Применение обновлённых значений в базу."""
+    if not message:
+        for bd in branchdata_list:
+            bd.value = new_values.get(bd.id, bd.value)
+            db.add(bd)
+    else:
+        # Обнуляем определённые индексы при ошибках
+        for i, bd in enumerate(branchdata_list):
+            if i in (0, 2, 3, 7):
+                bd.value = Decimal("0")
+                db.add(bd)
 
 
-def _calc_metric4(values: list[Decimal]) -> Decimal:
-    """Вычисление 4-й метрики: (value2 * 100) / value0"""
-    if values[0] == 0:
-        raise ValueError("Делить на 0 нельзя")
-    return Decimal(values[2] * 100 / values[0])
-
-
-async def _calculate_new_values(branchdata_id: int, branchdata_list: list, db: AsyncSession):
+async def _calculate_new_values(
+    branchdata_id: int,
+    branchdata_list: list[BranchData],
+    db: AsyncSession,
+    metrics_names: dict[int, str]
+):
+    """Вычисление новых значений метрик."""
     new_values = {}
     message = None
 
+    # Значение для кэша 8-й метрики
     cache_metric = branchdata_list[0].value
 
-    original_values = [Decimal(bd.value) for bd in branchdata_list]
+    # Словарь {название_метрики: значение}
+    original_values = {
+        metrics_names[bd.metric_id]: Decimal(bd.value)
+        for bd in branchdata_list
+    }
 
     for bd in branchdata_list:
         if bd.id == branchdata_id:
@@ -100,15 +111,20 @@ async def _calculate_new_values(branchdata_id: int, branchdata_list: list, db: A
             continue
 
         try:
-            if bd.metric_id == 3:  # 3-я метрика
-                new_values[bd.id] = _calc_metric3(original_values)
-                # cache = new_values[bd.id]
-            elif bd.metric_id == 4:  # 4-я метрика
-                new_values[bd.id] = _calc_metric4(original_values)
-            elif bd.metric_id == 8:  # 8-я метрика
-                new_values[bd.id] = await _calc_metric8(bd.branch_id, db, Decimal(cache_metric))
-            else:
-                new_values[bd.id] = bd.value
+            match bd.metric_id:
+                case 3:
+                    new_values[bd.id] = _calc_metric3(original_values)
+
+                case 4:
+                    new_values[bd.id] = _calc_metric4(original_values)
+
+                case 8:
+                    new_values[bd.id] = await _calc_metric8(
+                        bd.branch_id, db, Decimal(cache_metric)
+                    )
+
+                case _:
+                    new_values[bd.id] = bd.value
 
         except ValueError as e:
             message = str(e)
@@ -117,28 +133,38 @@ async def _calculate_new_values(branchdata_id: int, branchdata_list: list, db: A
     return message, new_values
 
 
-# --- Логика вычислений для последней даты всех метрик филиала ---
+# ---------------------------------------------------------
+# ---------------------- Пересчёт --------------------------
+# ---------------------------------------------------------
+
+async def _load_aup_ids():
+    """Получение id подразделений АУП из конфига."""
+    with open("config.json", encoding="utf-8") as f:
+        config = json.load(f)
+    return set(map(int, config.get("ids_aup", [])))
+
+
+async def _load_metrics_names(db: AsyncSession, branchdata_list: list[BranchData]) -> dict[int, str]:
+    """Создаёт словарь {id метрики: имя метрики}."""
+    metric_ids = {bd.metric_id for bd in branchdata_list}
+
+    result = await db.execute(
+        select(Metric.id, Metric.name).where(Metric.id.in_(metric_ids))
+    )
+    return {row[0]: row[1] for row in result.all()}
+
+
 async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = None):
-    """
-    Пересчет всех метрик филиала для конкретной даты.
-    Если branch_id не указан, пересчитывает для всех филиалов.
-    """
-    branch_ids = [branch_id] if branch_id is not None else []
-
-    # Если branch_id не передан, получаем все уникальные филиалы с данными на target_date
-    if not branch_ids:
-        # ==============================
-        # --- Конфигурация ---
-        # ==============================
-        with open("config.json", encoding="utf-8") as f:
-            config = json.load(f)
-
-        ids_aup = set(map(int, config.get("ids_aup", [])))  # Приводим к int
-
+    """Пересчёт всех метрик филиала на выбранную дату."""
+    if branch_id:
+        branch_ids = [branch_id]
+    else:
+        ids_aup = await _load_aup_ids()
         result = await db.execute(
-            select(Branche.id)
-            .where(or_(Branche.department_id.is_(None), ~Branche.department_id.in_(ids_aup)))
-            .distinct()
+            select(Branche.id).where(
+                or_(Branche.department_id.is_(None),
+                    ~Branche.department_id.in_(ids_aup))
+            ).distinct()
         )
         branch_ids = [row[0] for row in result.all()]
 
@@ -149,7 +175,7 @@ async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = No
             select(BranchData)
             .where(
                 BranchData.branch_id == bid,
-                BranchData.record_date == target_date
+                BranchData.record_date == target_date,
             )
             .order_by(BranchData.metric_id)
         )
@@ -158,11 +184,20 @@ async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = No
         if not branchdata_list:
             continue
 
-        message, new_values = await _calculate_new_values(bid, branchdata_list, db)
-        await _update_db(branchdata_list, new_values, message, db)
-        message, new_values = await _calculate_new_values(bid, branchdata_list, db)
-        await _update_db(branchdata_list, new_values, message, db)
+        metrics_names = await _load_metrics_names(db, branchdata_list)
 
-        messages[bid] = message
+        message, new_values = await _calculate_new_values(
+            bid, branchdata_list, db, metrics_names
+        )
+        await _apply_updates(branchdata_list, new_values, message, db)
 
-    return {k: v for k, v in messages.items() if v is not None}
+        # Повторный пересчёт после обновления
+        message, new_values = await _calculate_new_values(
+            bid, branchdata_list, db, metrics_names
+        )
+        await _apply_updates(branchdata_list, new_values, message, db)
+
+        if message:
+            messages[bid] = message
+
+    return messages

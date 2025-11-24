@@ -502,7 +502,7 @@ async def update_branchdata(
     # for i in range(2):
     await db.flush()
     message = await recalc(db, branchdata.record_date, branchdata.branch_id)
-    # message = await recalc(db, branchdata.record_date, test = 'TEST')
+    # message = await recalc(db, branchdata.record_date)
 
     await db.commit()
 
