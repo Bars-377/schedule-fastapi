@@ -232,11 +232,34 @@ def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dic
 
 async def get_chart_data(db: AsyncSession, metric_map):
     """Возвращает агрегированные данные для графиков за последний месяц"""
+
+    state_key = config.get("metrics", {}).get("state")
+    sick_key = config.get("metrics", {}).get("sick")
+    vacation_key = config.get("metrics", {}).get("vacation")
+    fact_key = config.get("metrics", {}).get("fact")
+
+    # Оставляем в metric_map только нужные метрики
+    allowed_metrics = {
+        state_key,
+        sick_key,
+        vacation_key,
+        fact_key,
+    }
+
+    # удаляем None на случай, если чего-то нет в конфиге
+    allowed_metrics = {m for m in allowed_metrics if m}
+
+    # фильтруем metric_map: id -> имя метрики
+    metric_map = {
+        metric_id: name
+        for metric_id, name in metric_map.items()
+        if name in allowed_metrics
+    }
+
     branchdata_rows = await fetch_branchdata(db)
 
-    # metrics_sums[date][metric_name] = сумма значений
     metrics_sums = defaultdict(lambda: defaultdict(float))
-    date_metrics_present = defaultdict(set)  # какие метрики есть для каждой даты
+    date_metrics_present = defaultdict(set)
 
     for bd in branchdata_rows:
         date_str = bd.record_date.isoformat()
@@ -245,24 +268,23 @@ async def get_chart_data(db: AsyncSession, metric_map):
             metrics_sums[date_str][metric_name] += float(bd.value or 0)
             date_metrics_present[date_str].add(metric_name)
 
-    # фильтруем только те даты, где есть все метрики из metric_map
     required_metrics = set(metric_map.values())
+
     all_dates = sorted([
         d for d, metrics in date_metrics_present.items()
         if required_metrics.issubset(metrics)
     ])
 
-    # оставляем только даты за последний месяц
+    # только текущий месяц
     today = datetime.now().date()
     first_day = today.replace(day=1)
     all_dates = [d for d in all_dates if datetime.fromisoformat(d).date() >= first_day]
 
-    staff = [metrics_sums[d].get("Штатная численность", 0) for d in all_dates]
-    sick = [metrics_sums[d].get("Б/л", 0) for d in all_dates]
-    vacation = [metrics_sums[d].get("Отпуск", 0) for d in all_dates]
-    fact = [metrics_sums[d].get("Фактическое число работающих (ед.)", 0) for d in all_dates]
+    staff = [metrics_sums[d].get(state_key, 0) for d in all_dates]
+    sick = [metrics_sums[d].get(sick_key, 0) for d in all_dates]
+    vacation = [metrics_sums[d].get(vacation_key, 0) for d in all_dates]
+    fact = [metrics_sums[d].get(fact_key, 0) for d in all_dates]
 
-    # Исправленный расчет рабочих: реально работающие = факт - больничные - отпуска
     working = [max(f - s - v, 0) for f, s, v in zip(fact, sick, vacation, strict=False)]
 
     return {
