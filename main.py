@@ -162,8 +162,8 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
         for row in table_data:
             metric_info = row["metrics"].get(metric.name)
             if metric_info and metric_info["value"] is not None and "%" in metric.name:
-                if totals["Штатная численность"] != 0:
-                    total = Decimal(totals["Фактическое число работающих (ед.)"] * 100 / totals["Штатная численность"])
+                if totals[config.get("metrics", []).get("state", [])] != 0:
+                    total = Decimal(totals[config.get("metrics", []).get("fact", [])] * 100 / totals[config.get("metrics", []).get("state", [])])
                 else:
                     total = Decimal(0)
             elif metric_info and metric_info["value"] is not None:
@@ -172,9 +172,9 @@ def calculate_totals(table_data: list[dict], metrics: list[Metric]):
         totals[metric.name] = total
 
     # Среднее значение по "Квартал Боевая численность"
-    if "Квартал Боевая численность" in totals and len(table_data) > 0:
-        avg_value = totals["Квартал Боевая численность"] / Decimal(len(table_data))
-        totals["Квартал Боевая численность"] = avg_value.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    if config.get("metrics", []).get("quarter", []) in totals and len(table_data) > 0:
+        avg_value = totals[config.get("metrics", []).get("quarter", [])] / Decimal(len(table_data))
+        totals[config.get("metrics", []).get("quarter", [])] = avg_value.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
 
     return totals
 

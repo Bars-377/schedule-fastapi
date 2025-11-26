@@ -6,6 +6,9 @@ from models import BranchData, Branche, Metric
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, or_, select
 
+with open("config.json", encoding="utf-8") as f:
+    config = json.load(f)
+
 # ---------------------------------------------------------
 # ------------------ Вспомогательные функции --------------
 # ---------------------------------------------------------
@@ -19,10 +22,10 @@ def _quarter_start(dt: date) -> date:
 def _calc_metric3(values: dict[str, Decimal]) -> Decimal:
     """Метрика 3: value0 - value4 - value5 - value6"""
     result = (
-        values["Штатная численность"]
-        - values["Б/л"]
-        - values["Отпуск"]
-        - values["Свободные ставки"]
+        values[config.get("metrics", []).get("state", [])]
+        - values[config.get("metrics", []).get("sick", [])]
+        - values[config.get("metrics", []).get("vacation", [])]
+        - values[config.get("metrics", []).get("free", [])]
     )
     if result < 0:
         raise ValueError("Отрицательное вычисление")
@@ -31,10 +34,10 @@ def _calc_metric3(values: dict[str, Decimal]) -> Decimal:
 
 def _calc_metric4(values: dict[str, Decimal]) -> Decimal:
     """Метрика 4: (value2 * 100) / value0"""
-    staff = values["Штатная численность"]
+    staff = values[config.get("metrics", []).get("state", [])]
     if staff == 0:
         raise ValueError("Делить на 0 нельзя")
-    return Decimal(values["Фактическое число работающих (ед.)"] * 100 / staff)
+    return Decimal(values[config.get("metrics", []).get("fact", [])] * 100 / staff)
 
 
 async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
@@ -139,8 +142,6 @@ async def _calculate_new_values(
 
 async def _load_aup_ids():
     """Получение id подразделений АУП из конфига."""
-    with open("config.json", encoding="utf-8") as f:
-        config = json.load(f)
     return set(map(int, config.get("ids_aup", [])))
 
 

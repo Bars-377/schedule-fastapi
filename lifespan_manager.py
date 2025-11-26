@@ -624,12 +624,12 @@ async def staffing_analysis():
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("""
-                    SELECT id_one_c, dep_id, planned, free, date
+                    SELECT id_one_c, dep_id, planned, free, date, vacations, hospital
                     FROM staffing_analysis
                     WHERE date = %s
                 """, (yesterday,))
                 rows = await cur.fetchall()
-                logger.info("Запрос `SELECT id_one_c, dep_id, planned, free, date FROM staffing_analysis` отправлен в MySQL")
+                logger.info("Запрос `SELECT id_one_c, dep_id, planned, free, date, vacations, hospital FROM staffing_analysis` отправлен в MySQL")
 
         # Сопоставляем id_one_c -> dep_id только если dep_id не NULL
         id_to_dep = {row["id_one_c"]: int(row["dep_id"])
@@ -645,19 +645,27 @@ async def staffing_analysis():
 
             planned_value = float(row["planned"] or 0)
             free_value = float(row["free"] or 0)
+            hospital = float(row["hospital"] or 0)
+            vacations = float(row["vacations"] or 0)
 
             temp_result.setdefault(dep_id, {})
             temp_result[dep_id].setdefault(1, set()).add(planned_value + free_value)
             temp_result[dep_id].setdefault(7, set()).add(free_value)
+            temp_result[dep_id].setdefault(10, set()).add(hospital)
+            temp_result[dep_id].setdefault(11, set()).add(vacations)
 
         # Суммируем данные для dep_id = 99 из dep_id = ids_aup
         ids_aup = set(config.get("ids_aup", []))
         sum_planned_free = 0.0
         sum_free = 0.0
+        sum_hospital = 0.0
+        sum_vacations = 0.0
         for aup_id in ids_aup:
             if aup_id in temp_result:
                 sum_planned_free += sum(temp_result[aup_id].get(1, set()))
                 sum_free += sum(temp_result[aup_id].get(7, set()))
+                sum_hospital += sum(temp_result[aup_id].get(10, set()))
+                sum_vacations += sum(temp_result[aup_id].get(11, set()))
 
         # Оставляем только департаменты, которые не в ids_aup
         result = {
@@ -669,7 +677,9 @@ async def staffing_analysis():
         # Добавляем dep_id = 99
         result[99] = {
             1: {sum_planned_free},
-            7: {sum_free}
+            7: {sum_free},
+            10: {sum_hospital},
+            11: {sum_vacations}
         }
 
         return result
