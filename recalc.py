@@ -44,13 +44,21 @@ def _calc_metric4(values: dict[str, Decimal]) -> Decimal:
     return Decimal(values[config.get("metrics", []).get("fact", [])] * 100 / staff)
 
 
-async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal, metric_id_to_name) -> Decimal:
+async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal, metric_id_to_name, target_date) -> Decimal:
     """Метрика 8 — среднее значение метрики 3 с корректировкой на прогресс квартала."""
+    # dates_query = await db.execute(
+    #     select(func.min(BranchData.record_date), func.max(BranchData.record_date))
+    #     .where(BranchData.branch_id == branch_id)
+    # )
+    # min_date, max_date = dates_query.one()
+
     dates_query = await db.execute(
-        select(func.min(BranchData.record_date), func.max(BranchData.record_date))
+        select(func.min(BranchData.record_date))
         .where(BranchData.branch_id == branch_id)
     )
-    min_date, max_date = dates_query.one()
+    min_date = dates_query.scalar_one_or_none()  # теперь это datetime.date или None
+
+    max_date = target_date
 
     if not max_date or cache_metric == 0:
         return Decimal(0)
@@ -75,7 +83,7 @@ async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal,
     # print(sum_metric3)
     # print(Decimal(days))
     # print(cache_metric)
-    # print('fddsf')
+    # print('--------------')
     # print(sum_metric3 / Decimal(days) * Decimal(100) / cache_metric)
 
     return sum_metric3 / Decimal(days) * Decimal(100) / cache_metric
@@ -103,7 +111,7 @@ async def _calculate_new_values(
     branchdata_id: int,
     branchdata_list: list[BranchData],
     db: AsyncSession,
-    metrics_names: dict[int, str]
+    metrics_names: dict[int, str], target_date
 ):
 
     # Имена метрик из БД
@@ -141,7 +149,7 @@ async def _calculate_new_values(
 
             elif bd.metric_id == metric_id_to_name.get("Квартал Боевая численность"):
                 new_values[bd.id] = await _calc_metric8(
-                    bd.branch_id, db, Decimal(cache_metric), metric_id_to_name
+                    bd.branch_id, db, Decimal(cache_metric), metric_id_to_name, target_date
                 )
 
             else:
@@ -206,13 +214,13 @@ async def recalc(db: AsyncSession, target_date: date, branch_id: int | None = No
         metrics_names = await _load_metrics_names(db, branchdata_list)
 
         message, new_values = await _calculate_new_values(
-            bid, branchdata_list, db, metrics_names
+            bid, branchdata_list, db, metrics_names, target_date
         )
         await _apply_updates(branchdata_list, new_values, message, db)
 
         # Повторный пересчёт после обновления
         message, new_values = await _calculate_new_values(
-            bid, branchdata_list, db, metrics_names
+            bid, branchdata_list, db, metrics_names, target_date
         )
         await _apply_updates(branchdata_list, new_values, message, db)
 

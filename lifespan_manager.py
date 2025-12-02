@@ -714,7 +714,7 @@ async def schedule_update_loop():
             departments = await fetch_departments_from_bitrix(session)
             users = await fetch_users_from_bitrix(session)
             days = [date.today()]
-            # days = [date(2025, 11, 21), date(2025, 12, 1)]
+            # days = [date(2025, 11, 21), date(2025, 12, 2)]
 
             if len(days) == 1:
                 # Только одна дата
@@ -730,13 +730,85 @@ async def schedule_update_loop():
                     today += timedelta(days=1)
 
 
+# # ==============================
+# # --- Обновление виртуального филиала "АУП" ---
+# # ==============================
+# async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_department_id: int = 99, name: str = "АУП"):
+#     global previous_metric_names
+
+#     # today = date.today()
+
+#     # --- 1. Создаём или получаем виртуальный филиал ---
+#     virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
+
+#     # --- 2. Загружаем все метрики ---
+#     metrics = (await db.execute(select(Metric))).scalars().all()
+
+#     # --- 3. Загружаем все филиалы ids_aup ---
+#     stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
+#     branches = (await db.execute(stmt_branches)).scalars().all()
+#     branch_map = {b.department_id: b for b in branches}
+
+#     # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
+#     stmt_branchdata = select(BranchData).where(
+#         BranchData.branch_id.in_([b.id for b in branches]),
+#         BranchData.record_date == today
+#     )
+#     branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
+
+#     # --- 5. Строим словарь branch_id -> metric_id -> value ---
+#     branch_data_map: dict[int, dict[int, Decimal]] = {}
+#     for bd in branchdata_list:
+#         branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
+
+#     # --- 6. Формируем BranchData для виртуального филиала ---
+#     virtual_branchdata_list = []
+#     for metric in metrics:
+#         if metric.name.lower() in previous_metric_names:
+#             # Для editing_metrics берем значение с предыдущей даты
+#             stmt_prev = select(BranchData).where(
+#                 BranchData.metric_id == metric.id,
+#                 BranchData.branch_id == virtual_branch.id,
+#                 BranchData.record_date < today
+#             ).order_by(BranchData.record_date.desc()).limit(1)
+#             prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
+#             value = prev_bd.value if prev_bd else Decimal("0.00")
+#         else:
+#             # Суммируем по всем филиалам ids_aup из словаря. Если данных нет, будет 0
+#             value = sum(
+#                 branch_data_map.get(branch.id, {}).get(metric.id, Decimal("0.00"))
+#                 for branch in branch_map.values()
+#             )
+
+#         # Проверяем, есть ли уже запись для виртуального филиала
+#         stmt_check = select(BranchData).where(
+#             BranchData.branch_id == virtual_branch.id,
+#             BranchData.metric_id == metric.id,
+#             BranchData.record_date == today
+#         )
+#         bd = (await db.execute(stmt_check)).scalar_one_or_none()
+#         if not bd:
+#             bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
+#             db.add(bd)
+#         else:
+#             bd.value = value  # Обновляем значение, даже если оно стало 0
+#         virtual_branchdata_list.append(bd)
+
+#     await db.flush()
+#     await recalc(db, today, virtual_branch.id)
+
+#     # # --- 7. Пересчёт метрик виртуального филиала ---
+#     # for bd in virtual_branchdata_list:
+#     #     await recalc(bd, db, virtual_branchdata_list)
+
+#     await db.commit()
+
+
 # ==============================
 # --- Обновление виртуального филиала "АУП" ---
 # ==============================
 async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_department_id: int = 99, name: str = "АУП"):
     global previous_metric_names
-
-    # today = date.today()
 
     # --- 1. Создаём или получаем виртуальный филиал ---
     virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
@@ -747,60 +819,65 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_departme
     # --- 3. Загружаем все филиалы ids_aup ---
     stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
     branches = (await db.execute(stmt_branches)).scalars().all()
-    branch_map = {b.department_id: b for b in branches}
+
+    branch_ids = [b.id for b in branches]
 
     # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
     stmt_branchdata = select(BranchData).where(
-        BranchData.branch_id.in_([b.id for b in branches]),
+        BranchData.branch_id.in_(branch_ids),
         BranchData.record_date == today
     )
     branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
 
-    # --- 5. Строим словарь branch_id -> metric_id -> value ---
     branch_data_map: dict[int, dict[int, Decimal]] = {}
     for bd in branchdata_list:
         branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
 
-    # --- 6. Формируем BranchData для виртуального филиала ---
-    virtual_branchdata_list = []
-    for metric in metrics:
-        if metric.name.lower() in previous_metric_names:
-            # Для editing_metrics берем значение с предыдущей даты
-            stmt_prev = select(BranchData).where(
-                BranchData.metric_id == metric.id,
-                BranchData.branch_id == virtual_branch.id,
-                BranchData.record_date < today
-            ).order_by(BranchData.record_date.desc()).limit(1)
-            prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
-            value = prev_bd.value if prev_bd else Decimal("0.00")
-        else:
-            # Суммируем по всем филиалам ids_aup из словаря. Если данных нет, будет 0
-            value = sum(
-                branch_data_map.get(branch.id, {}).get(metric.id, Decimal("0.00"))
-                for branch in branch_map.values()
-            )
+    # --- 5. Загружаем BranchData виртуального филиала за прошлые даты (для previous_metric_names) ---
+    prev_metrics_ids = [m.id for m in metrics if m.name.lower() in previous_metric_names]
+    stmt_prev_bd = select(BranchData).where(
+        BranchData.branch_id == virtual_branch.id,
+        BranchData.metric_id.in_(prev_metrics_ids),
+        BranchData.record_date < today
+    ).order_by(BranchData.metric_id, BranchData.record_date.desc())
+    prev_branchdata_list = (await db.execute(stmt_prev_bd)).scalars().all()
 
-        # Проверяем, есть ли уже запись для виртуального филиала
+    # --- 6. Строим словарь metric_id -> value последнего ненулевого предыдущего значения ---
+    last_prev_value_map: dict[int, Decimal] = {}
+    for bd in prev_branchdata_list:
+        if bd.metric_id not in last_prev_value_map:
+            last_prev_value_map[bd.metric_id] = bd.value
+
+    # --- 7. Формируем BranchData для виртуального филиала ---
+    # virtual_branchdata_list = []
+    for metric in metrics:
         stmt_check = select(BranchData).where(
             BranchData.branch_id == virtual_branch.id,
             BranchData.metric_id == metric.id,
             BranchData.record_date == today
         )
         bd = (await db.execute(stmt_check)).scalar_one_or_none()
+
+        if metric.name.lower() in previous_metric_names:
+            if bd and bd.value != Decimal("0.00"):
+                value = bd.value  # уже есть ненулевое значение — не трогаем
+            else:
+                value = last_prev_value_map.get(metric.id, Decimal("0.00"))
+        else:
+            value = sum(
+                branch_data_map.get(branch_id, {}).get(metric.id, Decimal("0.00"))
+                for branch_id in branch_ids
+            )
+
         if not bd:
             bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
             db.add(bd)
         else:
-            bd.value = value  # Обновляем значение, даже если оно стало 0
-        virtual_branchdata_list.append(bd)
+            bd.value = value  # обновляем значение, если нужно
+        # virtual_branchdata_list.append(bd)
 
     await db.flush()
     await recalc(db, today, virtual_branch.id)
-
-    # # --- 7. Пересчёт метрик виртуального филиала ---
-    # for bd in virtual_branchdata_list:
-    #     await recalc(bd, db, virtual_branchdata_list)
-
     await db.commit()
 
 
