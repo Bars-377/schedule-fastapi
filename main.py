@@ -136,9 +136,11 @@ async def fetch_branches(db: AsyncSession, page: int, per_page: int = 5):
     return branches, total_branches, total_pages, start_page, end_page
 
 
-async def fetch_metrics(db: AsyncSession):
+async def fetch_metrics(db: AsyncSession, user: User):
     result = await db.execute(select(Metric).order_by(Metric.id))
     metrics = result.scalars().all()
+    if user.id == 1:
+        return list(metrics)
     return [m for m in metrics if m.name.lower() != "отсутствие"]  # <-- фильтрация уже по объектам
 
 async def fetch_branchdata(db: AsyncSession):
@@ -186,7 +188,7 @@ async def get_available_dates(branchdata_rows: list[BranchData]) -> list[date]:
 
 def select_date(request: Request, available_dates: list[date]) -> date:
     """Выбирает дату из запроса или берёт последнюю доступную"""
-    selected_date_str = request.query_params.get("date")
+    selected_date_str = request.query_params.get("date_str")
     if selected_date_str:
         try:
             return date.fromisoformat(selected_date_str)
@@ -300,7 +302,7 @@ async def get_chart_data(db: AsyncSession, metric_map):
 # --- Основная функция с выбором даты ---
 async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depends(get_current_user), msg: str = None):
     branches, total_branches, total_pages, start_page, end_page = await fetch_branches(db, page)
-    metrics = await fetch_metrics(db)
+    metrics = await fetch_metrics(db, user)
     branchdata_rows = await fetch_branchdata(db)
 
     ids_aup = set(config.get("ids_aup", []))
@@ -434,60 +436,69 @@ async def update_branchdata(
     branch_id: int = Form(...),
     metric_id: int = Form(...),
     page: int = Form(1),
+    date_str: str | None = Form(None),  # <-- берём дату из формы
     db: AsyncSession = Depends(get_db),
     user=Depends(require_edit_permission),
 ):
-    value = parse_number(value)
-    today = date.today()
 
-    # --- Получаем последнюю дату для этой ветки, кроме сегодняшней ---
+    # --- определяем дату ---
+    if date_str:
+        try:
+            record_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return RedirectResponse(f"/?page={page}&msg=Неверный формат даты&status=400", status_code=303)
+    else:
+        record_date = date.today()
+
+    value = parse_number(value)
+
+    # --- Получаем последнюю дату для этой ветки, кроме выбранной даты ---
     result = await db.execute(
         select(func.max(BranchData.record_date)).where(
             BranchData.branch_id == branch_id,
-            BranchData.record_date < today
+            BranchData.record_date < record_date
         )
     )
-    last_date = result.scalar_one_or_none() or today
+    last_date = result.scalar_one_or_none() or record_date
 
-    # --- Проверяем, есть ли запись на сегодня для конкретной метрики ---
+    # --- Проверяем, есть ли запись на выбранную дату для конкретной метрики ---
     result = await db.execute(
         select(BranchData).where(
             BranchData.branch_id == branch_id,
             BranchData.metric_id == metric_id,
-            BranchData.record_date == today,
+            BranchData.record_date == record_date,
         )
     )
     branchdata = result.scalar_one_or_none()
 
     if branchdata:
-        # --- Обновляем существующую запись за сегодня ---
+        # --- Обновляем существующую запись ---
         branchdata.value = Decimal(value)
         db.add(branchdata)
-        await db.flush()  # вместо commit
+        await db.flush()
     else:
-        # --- Создаём новую запись с сегодняшней датой ---
+        # --- Создаём новую запись ---
         branchdata = BranchData(
             branch_id=branch_id,
             metric_id=metric_id,
-            record_date=today,
+            record_date=record_date,
             value=Decimal(value),
         )
         db.add(branchdata)
-        await db.flush()  # вместо commit
+        await db.flush()
 
-    # --- Создаём недостающие branchdata для всех метрик на сегодняшнюю дату, копируя значения с последней даты ---
+    # --- Создаём недостающие branchdata для всех метрик на выбранную дату ---
     metrics = (await db.execute(select(Metric).order_by(Metric.id))).scalars().all()
     for metric in metrics:
         result = await db.execute(
             select(BranchData).where(
                 BranchData.branch_id == branch_id,
                 BranchData.metric_id == metric.id,
-                BranchData.record_date == today,
+                BranchData.record_date == record_date,
             )
         )
         existing_bd = result.scalar_one_or_none()
         if not existing_bd:
-            # Берем значение с последней даты
             result = await db.execute(
                 select(BranchData).where(
                     BranchData.branch_id == branch_id,
@@ -501,31 +512,13 @@ async def update_branchdata(
             new_bd = BranchData(
                 branch_id=branch_id,
                 metric_id=metric.id,
-                record_date=today,
+                record_date=record_date,
                 value=new_value,
             )
             db.add(new_bd)
 
-    # await db.commit()
-
-    # # --- Пересчёт метрик для филиала ---
-    # async def _fetch_branchdata(branch_id: int, record_date, db: AsyncSession):
-    #     result = await db.execute(
-    #         select(BranchData)
-    #         .where(
-    #             BranchData.branch_id == branch_id,
-    #             BranchData.record_date == record_date,
-    #         )
-    #         .order_by(BranchData.metric_id)
-    #     )
-    #     return result.scalars().all()
-    # branchdata_list = await _fetch_branchdata(branchdata.branch_id, branchdata.record_date, db)
-    # print(branchdata_list)
-    # for i in range(2):
     await db.flush()
     message = await recalc(db, branchdata.record_date, branchdata.branch_id)
-    # message = await recalc(db, branchdata.record_date)
-
     await db.commit()
 
     if message:

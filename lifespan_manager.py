@@ -198,10 +198,10 @@ async def update_branchdata_value(branchdata: BranchData, value: float, log_pref
 # ==============================
 # --- Филиалы и метрики ---
 # ==============================
-async def update_branches(db, departments, metrics):
+async def update_branches(db, departments, metrics, today):
     global previous_metric_names
 
-    today = date.today()
+    # today = date.today()
 
     for dept in departments:
         name = dept.get("NAME", "").strip()
@@ -388,10 +388,10 @@ async def queue_email(
     })
 
 
-async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore):
+async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today):
     """Обрабатывает одного пользователя и обновляет соответствующие словари."""
     employee_id = int(user["ID"])
-    today = date.today()
+    # today = date.today()
 
     async with semaphore:
         absences = await fetch_absences_for_user_async(employee_id)
@@ -466,7 +466,7 @@ async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacat
                 )
 
 
-async def process_vacations(session, users):
+async def process_vacations(session, users, today):
     """
     Получает данные об отсутствии сотрудников и возвращает словари dept_id -> {metric_id: set(employee_ids)}.
     Даже если сотрудников нет, метрики будут присутствовать с пустым множеством.
@@ -514,7 +514,7 @@ async def process_vacations(session, users):
 
     # --- 4. Обработка пользователей асинхронно ---
     tasks = [
-        _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore)
+        _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today)
         for user in users
     ]
     await asyncio.gather(*tasks, return_exceptions=True)  # чтобы один баг не прерывал всех
@@ -522,41 +522,11 @@ async def process_vacations(session, users):
     return sick_leaves, all_vacations, special_users
 
 
-# async def update_vacations(db, departments_employees):
-#     """
-#     Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
-#     """
-#     today = date.today()
-#     for dept_id, metrics_dict in departments_employees.items():
-#         stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
-#         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
-#         if not branch:
-#             logger.warning(f"Филиал для department_id={dept_id} не найден")
-#             continue
-#         logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
-
-#         for metric_id, employees_set in metrics_dict.items():
-#             value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
-#             stmt_data = select(BranchData).where(
-#                 BranchData.branch_id == branch.id,
-#                 BranchData.metric_id == metric_id,
-#                 BranchData.record_date == today,
-#             )
-#             bd = (await db.execute(stmt_data)).scalar_one_or_none()
-#             if bd:
-#                 await update_branchdata_value(bd, value, log_prefix=f"{branch.name}")
-#             else:
-#                 bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=value)
-#                 db.add(bd)
-#                 logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {value}")
-#     await db.commit()
-
-
-async def update_vacations(db, departments_employees, condition = False):
+async def update_vacations(db, departments_employees, today, condition = False):
     """
     Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
     """
-    today = date.today()
+    # today = date.today()
     for dept_id, metrics_dict in departments_employees.items():
         stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
         branch = (await db.execute(stmt_branch)).scalar_one_or_none()
@@ -596,7 +566,7 @@ async def get_or_create_virtual_branch(db, virtual_department_id: int = 99, name
     return branch
 
 
-async def staffing_analysis():
+async def staffing_analysis(db, today):
     """
     Загружает данные из MySQL таблицы staffing_analysis (mysql_mdtomskbot)
     и возвращает словарь dep_id -> {metric_id: set[float]}, где
@@ -619,7 +589,8 @@ async def staffing_analysis():
             maxsize=5,
         )
 
-        yesterday = date.today() - timedelta(days=1)
+        # yesterday = date.today() - timedelta(days=1)
+        yesterday = today - timedelta(days=1)
 
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -636,6 +607,11 @@ async def staffing_analysis():
                      for row in rows
                      if row["dep_id"] is not None}
 
+        # Имена метрик из БД
+        result_metrics = await db.execute(select(Metric))
+        metrics_list = result_metrics.scalars().all()  # <-- список объектов Metric
+        metric_id_to_name = {m.name: m.id for m in metrics_list}
+
         temp_result: dict[int, dict[int, set[float]]] = {}
         for row in rows:
             id_one_c = row["id_one_c"]
@@ -649,10 +625,11 @@ async def staffing_analysis():
             vacations = float(row["vacations"] or 0)
 
             temp_result.setdefault(dep_id, {})
-            temp_result[dep_id].setdefault(1, set()).add(planned_value + free_value)
-            temp_result[dep_id].setdefault(7, set()).add(free_value)
-            temp_result[dep_id].setdefault(10, set()).add(hospital)
-            temp_result[dep_id].setdefault(11, set()).add(vacations)
+            temp_result[dep_id].setdefault(metric_id_to_name.get("Штатная численность (1С)"), set()).add(planned_value + free_value)
+            temp_result[dep_id].setdefault(metric_id_to_name.get("Свободные ставки (1С)"), set()).add(free_value)
+            temp_result[dep_id].setdefault(metric_id_to_name.get("Б/л (1С)"), set()).add(hospital)
+            temp_result[dep_id].setdefault(metric_id_to_name.get("Отпуск (1С)"), set()).add(vacations)
+
 
         # Суммируем данные для dep_id = 99 из dep_id = ids_aup
         ids_aup = set(config.get("ids_aup", []))
@@ -662,10 +639,10 @@ async def staffing_analysis():
         sum_vacations = 0.0
         for aup_id in ids_aup:
             if aup_id in temp_result:
-                sum_planned_free += sum(temp_result[aup_id].get(1, set()))
-                sum_free += sum(temp_result[aup_id].get(7, set()))
-                sum_hospital += sum(temp_result[aup_id].get(10, set()))
-                sum_vacations += sum(temp_result[aup_id].get(11, set()))
+                sum_planned_free += sum(temp_result[aup_id].get(metric_id_to_name.get("Штатная численность (1С)"), set()))
+                sum_free += sum(temp_result[aup_id].get(metric_id_to_name.get("Свободные ставки (1С)"), set()))
+                sum_hospital += sum(temp_result[aup_id].get(metric_id_to_name.get("Б/л (1С)"), set()))
+                sum_vacations += sum(temp_result[aup_id].get(metric_id_to_name.get("Отпуск (1С)"), set()))
 
         # Оставляем только департаменты, которые не в ids_aup
         result = {
@@ -676,10 +653,10 @@ async def staffing_analysis():
 
         # Добавляем dep_id = 99
         result[99] = {
-            1: {sum_planned_free},
-            7: {sum_free},
-            10: {sum_hospital},
-            11: {sum_vacations}
+            metric_id_to_name.get("Штатная численность (1С)"): {sum_planned_free},
+            metric_id_to_name.get("Свободные ставки (1С)"): {sum_free},
+            metric_id_to_name.get("Б/л (1С)"): {sum_hospital},
+            metric_id_to_name.get("Отпуск (1С)"): {sum_vacations}
         }
 
         return result
@@ -688,6 +665,37 @@ async def staffing_analysis():
         if pool:
             pool.close()
             await pool.wait_closed()
+
+
+async def verarbeitung(session, users, departments, today):
+    # --- 2. Обновляем обычные филиалы ---
+    async with AsyncSessionLocal() as db:
+        metrics = (await db.execute(select(Metric))).scalars().all()
+        await update_branches(db, departments, metrics, today)
+
+    # --- 3. Обрабатываем отпуска, больничные и спецпользователей ---
+    sick_leaves, all_vacations, special_users = await process_vacations(session, users, today)
+
+    async with AsyncSessionLocal() as db:
+
+        await update_vacations(db, await staffing_analysis(db, today), today, True)
+
+        await update_vacations(db, sick_leaves, today)
+        await update_vacations(db, all_vacations, today)
+        await update_vacations(db, special_users, today)
+
+    # --- 4. Создаём/обновляем виртуальный филиал "АУП" ---
+    async with AsyncSessionLocal() as db:
+        ids_aup = set(config.get("ids_aup", []))
+        # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
+        await ensure_virtual_branch(db, ids_aup, today)
+        logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
+
+    async with AsyncSessionLocal() as db:
+        # today = date.today()
+        # # await db.flush()
+        await recalc(db, today)
+        await db.commit()
 
 
 async def schedule_update_loop():
@@ -705,44 +713,30 @@ async def schedule_update_loop():
             # --- 1. Загружаем данные из Bitrix ---
             departments = await fetch_departments_from_bitrix(session)
             users = await fetch_users_from_bitrix(session)
+            days = [date.today()]
+            # days = [date(2025, 11, 21), date(2025, 12, 1)]
 
-            # --- 2. Обновляем обычные филиалы ---
-            async with AsyncSessionLocal() as db:
-                metrics = (await db.execute(select(Metric))).scalars().all()
-                await update_branches(db, departments, metrics)
-
-            # --- 3. Обрабатываем отпуска, больничные и спецпользователей ---
-            sick_leaves, all_vacations, special_users = await process_vacations(session, users)
-
-            async with AsyncSessionLocal() as db:
-
-                await update_vacations(db, await staffing_analysis(), True)
-
-                await update_vacations(db, sick_leaves)
-                await update_vacations(db, all_vacations)
-                await update_vacations(db, special_users)
-
-            # --- 4. Создаём/обновляем виртуальный филиал "АУП" ---
-            async with AsyncSessionLocal() as db:
-                ids_aup = set(config.get("ids_aup", []))
-                # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
-                await ensure_virtual_branch(db, ids_aup)
-                logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
-
-            async with AsyncSessionLocal() as db:
-                today = date.today()
-                # await db.flush()
-                await recalc(db, today)
-                await db.commit()
+            if len(days) == 1:
+                # Только одна дата
+                for today in days:
+                    await verarbeitung(session, users, departments, today)
+            else:
+                # Диапазон от минимальной до максимальной даты
+                start = min(days)
+                end = max(days)
+                today = start
+                while today <= end:
+                    await verarbeitung(session, users, departments, today)
+                    today += timedelta(days=1)
 
 
 # ==============================
 # --- Обновление виртуального филиала "АУП" ---
 # ==============================
-async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: int = 99, name: str = "АУП"):
+async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_department_id: int = 99, name: str = "АУП"):
     global previous_metric_names
 
-    today_date = date.today()
+    # today = date.today()
 
     # --- 1. Создаём или получаем виртуальный филиал ---
     virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
@@ -758,7 +752,7 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
     # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
     stmt_branchdata = select(BranchData).where(
         BranchData.branch_id.in_([b.id for b in branches]),
-        BranchData.record_date == today_date
+        BranchData.record_date == today
     )
     branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
 
@@ -775,7 +769,7 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
             stmt_prev = select(BranchData).where(
                 BranchData.metric_id == metric.id,
                 BranchData.branch_id == virtual_branch.id,
-                BranchData.record_date < today_date
+                BranchData.record_date < today
             ).order_by(BranchData.record_date.desc()).limit(1)
             prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
             value = prev_bd.value if prev_bd else Decimal("0.00")
@@ -790,18 +784,18 @@ async def ensure_virtual_branch(db, ids_aup: tuple[int], virtual_department_id: 
         stmt_check = select(BranchData).where(
             BranchData.branch_id == virtual_branch.id,
             BranchData.metric_id == metric.id,
-            BranchData.record_date == today_date
+            BranchData.record_date == today
         )
         bd = (await db.execute(stmt_check)).scalar_one_or_none()
         if not bd:
-            bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today_date, value=value)
+            bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
             db.add(bd)
         else:
             bd.value = value  # Обновляем значение, даже если оно стало 0
         virtual_branchdata_list.append(bd)
 
     await db.flush()
-    await recalc(db, today_date, virtual_branch.id)
+    await recalc(db, today, virtual_branch.id)
 
     # # --- 7. Пересчёт метрик виртуального филиала ---
     # for bd in virtual_branchdata_list:

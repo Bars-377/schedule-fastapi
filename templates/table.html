@@ -65,7 +65,7 @@
                         <!-- {{ latest_date or '-' }} -->
                         <form method="get" action="/">
                             <label>Выбрать дату:
-                                <select name="date">
+                                <select name="date_str">
                                     {% for dt in available_dates %}
                                     <option value="{{ dt }}" {% if dt==selected_date %}selected{% endif %}>
                                         {{ dt }}
@@ -119,12 +119,13 @@
                             <input type="hidden" name="branch_id" value="{{ row.branch_id }}">
                             <input type="hidden" name="metric_id" value="{{ metric_data.metric_id }}">
                             <input type="hidden" name="page" value="{{ page }}">
+                            <input type="hidden" name="date_str" value="{{ selected_date }}">
                             <br>
                             <input type="submit" value="Сохранить" class="table-btn">
                         </form>
                     </td>
                     {% else %}
-                    <td {% if loop.index==8 and metric_data.value is number and metric_data.value < 80
+                    <td {% if loop.index==10 and metric_data.value is number and metric_data.value < 80
                         %}style="background-color: #ffcccc;" {% endif %}>
                         {{ metric_data.value }}
                     </td>

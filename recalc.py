@@ -37,10 +37,14 @@ def _calc_metric4(values: dict[str, Decimal]) -> Decimal:
     staff = values[config.get("metrics", []).get("state", [])]
     if staff == 0:
         raise ValueError("Делить на 0 нельзя")
+    # print('-------------------')
+    # print(values[config.get("metrics", []).get("fact", [])])
+    # print(staff)
+    # print(Decimal(values[config.get("metrics", []).get("fact", [])] * 100 / staff))
     return Decimal(values[config.get("metrics", []).get("fact", [])] * 100 / staff)
 
 
-async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal) -> Decimal:
+async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal, metric_id_to_name) -> Decimal:
     """Метрика 8 — среднее значение метрики 3 с корректировкой на прогресс квартала."""
     dates_query = await db.execute(
         select(func.min(BranchData.record_date), func.max(BranchData.record_date))
@@ -62,11 +66,17 @@ async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal)
     sum_query = await db.execute(
         select(func.sum(BranchData.value)).where(
             BranchData.branch_id == branch_id,
-            BranchData.metric_id == 3,
+            BranchData.metric_id == metric_id_to_name.get("Фактическое число работающих (ед.)"),
             BranchData.record_date.between(start, max_date),
         )
     )
     sum_metric3 = Decimal(sum_query.scalar() or 0)
+
+    # print(sum_metric3)
+    # print(Decimal(days))
+    # print(cache_metric)
+    # print('fddsf')
+    # print(sum_metric3 / Decimal(days) * Decimal(100) / cache_metric)
 
     return sum_metric3 / Decimal(days) * Decimal(100) / cache_metric
 
@@ -95,6 +105,15 @@ async def _calculate_new_values(
     db: AsyncSession,
     metrics_names: dict[int, str]
 ):
+
+    # Имена метрик из БД
+    result = await db.execute(select(Metric))
+    metrics_list = result.scalars().all()  # <-- список объектов Metric
+
+    metric_id_to_name = {m.name: m.id for m in metrics_list}
+
+    # print(metric_id_to_name)
+
     """Вычисление новых значений метрик."""
     new_values = {}
     message = None
@@ -114,20 +133,19 @@ async def _calculate_new_values(
             continue
 
         try:
-            match bd.metric_id:
-                case 3:
-                    new_values[bd.id] = _calc_metric3(original_values)
+            if bd.metric_id == metric_id_to_name.get("Фактическое число работающих (ед.)"):
+                new_values[bd.id] = _calc_metric3(original_values)
 
-                case 4:
-                    new_values[bd.id] = _calc_metric4(original_values)
+            elif bd.metric_id == metric_id_to_name.get("Фактическое число работающих от шт. численности (%)"):
+                new_values[bd.id] = _calc_metric4(original_values)
 
-                case 8:
-                    new_values[bd.id] = await _calc_metric8(
-                        bd.branch_id, db, Decimal(cache_metric)
-                    )
+            elif bd.metric_id == metric_id_to_name.get("Квартал Боевая численность"):
+                new_values[bd.id] = await _calc_metric8(
+                    bd.branch_id, db, Decimal(cache_metric), metric_id_to_name
+                )
 
-                case _:
-                    new_values[bd.id] = bd.value
+            else:
+                new_values[bd.id] = bd.value
 
         except ValueError as e:
             message = str(e)
