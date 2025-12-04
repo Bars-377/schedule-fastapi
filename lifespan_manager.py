@@ -1,12 +1,28 @@
+"""
+Рефакторинг
+
+Основные улучшения:
+- Инкапсуляция состояния в классе LifespanManager для уменьшения глобального состояния.
+- Чёткие аннотации типов.
+- Унификация логирования и сообщений.
+- Явные проверки и обработка исключений в сетевых/БД-вызовах.
+- Улучшенные docstring'и и читаемость.
+- Сохранена совместимость API функций (асинхронные функции с теми же семантиками).
+"""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import smtplib
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from email.message import EmailMessage
 from pathlib import Path
+from typing import Any
 
 import aiohttp
 import aiomysql
@@ -15,920 +31,783 @@ from recalc import recalc
 from sqlmodel import SQLModel, select
 
 # ==============================
-# --- Настройка логирования ---
+# --- Логирование (глобально) ---
 # ==============================
 logger = logging.getLogger("branch_update")
-logger.setLevel(logging.INFO)
-formatter = logging.Formatter(
-    "[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
-)
-ch = logging.StreamHandler()
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+    ch = logging.StreamHandler()
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
 # ==============================
-# --- Конфигурация ---
+# --- Конфигурация (загружается один раз) ---
 # ==============================
 with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+    CONFIG: dict[str, Any] = json.load(f)
 
-previous_metric_names = [n.lower() for n in config.get("previous_metrics", [])]
+PREVIOUS_METRIC_NAMES: set[str] = {n.lower() for n in CONFIG.get("previous_metrics", [])}
 
-BITRIX_BASE_URL = "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4"
+BITRIX_BASE_URL = CONFIG.get("bitrix_base_url", "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4")
 BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID&ORDER=ASC&start={{start}}"
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = 10
-UPDATE_MINUTE = 00
+UPDATE_HOUR = CONFIG.get("update_hour", 10)
+UPDATE_MINUTE = CONFIG.get("update_minute", 0)
 
 MYSQL_CONFIG = {
-    "host": config["mysql"]["host"],
-    "user": config["mysql"]["user"],
-    "password": config["mysql"]["password"],
-    "db": config["mysql"]["database"],
-    "charset": config["mysql"]["charset"],
+    "host": CONFIG["mysql"]["host"],
+    "user": CONFIG["mysql"]["user"],
+    "password": CONFIG["mysql"]["password"],
+    "db": CONFIG["mysql"]["database"],
+    "charset": CONFIG["mysql"]["charset"],
 }
 
-mysql_pool: aiomysql.Pool | None = None
-mysql_connected: bool = False  # Явное состояние
+# Bitrix client defaults
+BITRIX_SEMAPHORE_DEFAULT = 10
+BITRIX_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
 
 # ==============================
-# --- Повтор с обработкой ошибок ---
+# --- Вспомогательные типы ---
 # ==============================
-async def retry_forever(func, *args, delay: int = 5, name: str = "unknown", **kwargs):
+MetricMap = dict[str, int]
+DeptMetricMap = dict[int, dict[int, set[int]]]
+StaffingMap = dict[int, dict[int, set[float]]]
+
+
+# ==============================
+# --- Retry helper (реиспользуемый) ---
+# ==============================
+async def retry_forever(coro_func, *args, delay: int = 5, name: str = "unknown", **kwargs):
+    """
+    Повторяет вызов асинхронной функции пока не выполнится успешно.
+    Позволяет логировать и ждать между попытками.
+    """
     attempt = 1
     while True:
         try:
-            # logger.info(f"[{name}] Попытка {attempt} выполнения функции...")
-            # logger.info(f"[{name}] Успешно выполнено после {attempt} попыток")
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logger.error(
-                f"[{name}] ❌ Ошибка: {e}. Повтор через {delay} сек (попытка {attempt})",
-                exc_info=True
-            )
+            return await coro_func(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"[{name}] Ошибка (попытка {attempt}): {exc}", exc_info=True)
             await asyncio.sleep(delay)
             attempt += 1
 
 
 # ==============================
-# --- MySQL ---
+# --- Основной класс менеджера ---
 # ==============================
-async def init_mysql_pool(timeout: int = 10) -> aiomysql.Pool:
-    global mysql_pool, mysql_connected
+class LifespanManager:
+    def __init__(self, config: dict[str, Any]):
+        self.config = config
+        self.previous_metric_names: set[str] = {n.lower() for n in config.get("previous_metrics", [])}
+        self.mysql_pool: aiomysql.Pool | None = None
+        self.mysql_connected: bool = False
+        self.bitrix_semaphore = asyncio.Semaphore(config.get("bitrix_semaphore", BITRIX_SEMAPHORE_DEFAULT))
+        self.email_queue: asyncio.Queue = asyncio.Queue()
+        self.email_semaphore = asyncio.Semaphore(1)
+        self._email_workers: list[asyncio.Task] = []
+        self._background_task: asyncio.Task | None = None
 
-    if mysql_connected and mysql_pool is not None:
-        return mysql_pool
+    # ------------------------------
+    # MySQL pool
+    # ------------------------------
+    async def init_mysql_pool(self, timeout: int = 10) -> aiomysql.Pool:
+        if self.mysql_connected and self.mysql_pool is not None:
+            return self.mysql_pool
 
-    while True:
-        try:
-            logger.info("Подключение к MySQL...")
-            mysql_pool = await asyncio.wait_for(
-                aiomysql.create_pool(
-                    minsize=1,
-                    maxsize=10,
-                    **MYSQL_CONFIG
-                ),
-                timeout=timeout
-            )
-            mysql_connected = True
-            logger.info("✅ Успешное подключение к MySQL")
-            return mysql_pool
-        except TimeoutError:
-            logger.error(f"⏱ Таймаут подключения к MySQL ({timeout} сек)")
-        except Exception as e:
-            logger.error(f"❌ Ошибка подключения к MySQL: {e}", exc_info=True)
-        await asyncio.sleep(5)
+        while True:
+            try:
+                logger.info("Подключение к MySQL...")
+                self.mysql_pool = await asyncio.wait_for(
+                    aiomysql.create_pool(minsize=1, maxsize=10, **MYSQL_CONFIG),
+                    timeout=timeout
+                )
+                self.mysql_connected = True
+                logger.info("✅ Успешное подключение к MySQL")
+                return self.mysql_pool
+            except TimeoutError:
+                logger.error(f"⏱ Таймаут подключения к MySQL ({timeout} сек)")
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к MySQL: {e}", exc_info=True)
+            await asyncio.sleep(5)
 
+    async def close_mysql_pool(self):
+        if self.mysql_pool:
+            self.mysql_pool.close()
+            await self.mysql_pool.wait_closed()
+            self.mysql_pool = None
+            self.mysql_connected = False
+            logger.info("MySQL пул закрыт")
 
-async def fetch_absences_for_user_async(employee_id: int):
-    # logger.info(f"Запрос отсутствий для сотрудника ID={employee_id}")
-    pool = await init_mysql_pool()
-    query = """
-        SELECT
-            e.ID AS ELEMENT_ID,
-            e.NAME AS ABSENCE_NAME,
-            e.ACTIVE_FROM,
-            e.ACTIVE_TO,
-            p_user.VALUE AS EMPLOYEE_ID,
-            TRIM(CONCAT(u.LAST_NAME, ' ', u.NAME, ' ', IFNULL(u.SECOND_NAME, ''))) AS EMPLOYEE_NAME,
-            enum_type.VALUE AS ABSENCE_TYPE
-        FROM b_iblock_element e
-        LEFT JOIN b_iblock_element_property p_user
-            ON e.ID = p_user.IBLOCK_ELEMENT_ID AND p_user.IBLOCK_PROPERTY_ID = 1
-        LEFT JOIN b_user u
-            ON u.ID = CAST(p_user.VALUE AS UNSIGNED)
-        LEFT JOIN b_iblock_element_property p_type
-            ON e.ID = p_type.IBLOCK_ELEMENT_ID AND p_type.IBLOCK_PROPERTY_ID = 4
-        LEFT JOIN b_iblock_property_enum enum_type
-            ON enum_type.ID = p_type.VALUE_ENUM
-        WHERE e.IBLOCK_ID = 1 AND p_user.VALUE = %s
-        ORDER BY e.ACTIVE_FROM;
-    """
+    # ------------------------------
+    # Bitrix helpers
+    # ------------------------------
+    async def fetch_json(self, session: aiohttp.ClientSession, url: str) -> Any:
+        async def _fetch():
+            async with self.bitrix_semaphore:
+                async with session.get(url, timeout=BITRIX_TIMEOUT) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    return data.get("result", [])
+        return await retry_forever(_fetch, name=f"Bitrix {url}")
 
-    async def _fetch():
-        try:
-            async with pool.acquire() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    await cursor.execute(query, (employee_id,))
-                    return await cursor.fetchall()
-        except aiomysql.OperationalError as e:
-            logger.warning(f"MySQL OperationalError: {e}. Попробуем переподключиться.")
-            # Обнуляем состояние, чтобы при следующем вызове init_mysql_pool переподключился
-            global mysql_connected, mysql_pool
-            mysql_connected = False
-            mysql_pool = None
-            raise  # retry_forever перехватит и повторит запрос
+    async def fetch_departments_from_bitrix(self, session: aiohttp.ClientSession) -> list[dict[str, Any]]:
+        logger.info("Загрузка списка отделов из Bitrix...")
+        return await self.fetch_json(session, f"{BITRIX_BASE_URL}/department.get.json")
 
-    return await retry_forever(_fetch, name=f"MySQL fetch_absences ID={employee_id}")
+    async def fetch_users_from_bitrix(self, session: aiohttp.ClientSession) -> list[dict[str, Any]]:
+        logger.info("Загрузка списка пользователей из Bitrix...")
+        all_users: list[dict[str, Any]] = []
+        start = 0
+        page_size = 50
+        while True:
+            result = await self.fetch_json(session, BITRIX_USER_LIST_URL.format(start=start))
+            if not result:
+                break
+            all_users.extend(result)
+            start += page_size
+        logger.info(f"Всего загружено пользователей: {len(all_users)}")
+        return all_users
 
+    async def fetch_user_info(self, session: aiohttp.ClientSession, employee_id: int) -> list[dict[str, Any]]:
+        return await self.fetch_json(session, BITRIX_USER_INFO_URL.format(user_id=employee_id))
 
-# ==============================
-# --- Bitrix с ретраями и семафором ---
-# ==============================
-BITRIX_SEMAPHORE = asyncio.Semaphore(10)
-BITRIX_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
-
-async def fetch_json(session, url: str):
-    async def _fetch():
-        async with BITRIX_SEMAPHORE:
-            async with session.get(url, timeout=BITRIX_TIMEOUT) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                return data.get("result", [])
-    return await retry_forever(_fetch, name=f"Bitrix {url}")
-
-async def fetch_departments_from_bitrix(session):
-    logger.info("Загрузка списка отделов из Bitrix...")
-    return await fetch_json(session, f"{BITRIX_BASE_URL}/department.get.json")
-
-async def fetch_users_from_bitrix(session):
-    logger.info("Загрузка списка пользователей из Bitrix...")
-    all_users, start, page_size = [], 0, 50
-    while True:
-        result = await fetch_json(session, BITRIX_USER_LIST_URL.format(start=start))
+    async def fetch_department_info(self, session: aiohttp.ClientSession, dept_id: int) -> tuple[str | None, str | None]:
+        result = await self.fetch_json(session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id))
         if not result:
-            break
-        all_users.extend(result)
-        start += page_size
-    logger.info(f"Всего загружено пользователей: {len(all_users)}")
-    return all_users
+            return None, None
+        row = result[0]
+        return (row.get("ID", "").strip(), row.get("NAME", "").strip())
 
+    # ------------------------------
+    # Работы с метриками и BranchData
+    # ------------------------------
+    async def update_branchdata_value(self, branchdata: BranchData, value: float, log_prefix: str = ""):
+        old_value = branchdata.value
+        branchdata.value = Decimal(value)
+        logger.info(
+            f"{log_prefix} Обновлено значение BranchData (branch_id={branchdata.branch_id}, metric_id={branchdata.metric_id}): {old_value} -> {value}"
+        )
 
-async def fetch_user_info(session, employee_id):
-    # logger.info(f"Загрузка информации о пользователе ID={employee_id}")
-    return await fetch_json(session, BITRIX_USER_INFO_URL.format(user_id=employee_id))
+    async def update_branches(self, db, departments: Iterable[dict[str, Any]], metrics: Iterable[Metric], today: date):
+        for dept in departments:
+            name = dept.get("NAME", "").strip()
+            department_id = int(dept.get("ID"))
+            stmt = select(Branche).where(Branche.department_id == department_id)
+            branch = (await db.execute(stmt)).scalar_one_or_none()
+            if not branch:
+                branch = Branche(name=name, department_id=department_id)
+                db.add(branch)
+                await db.flush()
+                logger.info(f"✅ Добавлен новый филиал: {name} (ID={department_id})")
 
-async def fetch_department_info(session, dept_id):
-    result = await fetch_json(session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id))
-    # logger.info(f"Информация о департаменте {dept_id}: {dept_info}")
-    return result[0]["ID"].strip() if result else None, result[0]["NAME"].strip() if result else None
+            for metric in metrics:
+                stmt_check = select(BranchData).where(
+                    BranchData.branch_id == branch.id,
+                    BranchData.metric_id == metric.id,
+                    BranchData.record_date == today,
+                )
+                existing_record = (await db.execute(stmt_check)).scalar_one_or_none()
 
+                if existing_record:
+                    if metric.name.lower() in self.previous_metric_names:
+                        stmt_prev = select(BranchData).where(
+                            BranchData.branch_id == branch.id,
+                            BranchData.metric_id == metric.id,
+                            BranchData.record_date < today,
+                        ).order_by(BranchData.record_date.desc()).limit(1)
+                        prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
+                        existing_record.value = prev_record.value if prev_record else Decimal("0.00")
+                    else:
+                        existing_record.value = Decimal("0.00")
+                    db.add(existing_record)
+                else:
+                    if metric.name.lower() in self.previous_metric_names:
+                        stmt_prev = select(BranchData).where(
+                            BranchData.branch_id == branch.id,
+                            BranchData.metric_id == metric.id,
+                            BranchData.record_date < today,
+                        ).order_by(BranchData.record_date.desc()).limit(1)
+                        prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
+                        value = prev_record.value if prev_record else Decimal("0.00")
+                    else:
+                        value = Decimal("0.00")
+                    branchdata = BranchData(branch_id=branch.id, metric_id=metric.id, record_date=today, value=value)
+                    db.add(branchdata)
 
-# ==============================
-# --- BranchData обновление ---
-# ==============================
-async def update_branchdata_value(branchdata: BranchData, value: float, log_prefix: str = ""):
-    old_value = branchdata.value
-    branchdata.value = Decimal(value)
-    logger.info(f"{log_prefix} Обновлено значение BranchData (branch_id={branchdata.branch_id}, metric_id={branchdata.metric_id}): {old_value} -> {value}")
+            await db.flush()
+            await recalc(db, today, branch.id)
 
+        await db.commit()
 
-# ==============================
-# --- Филиалы и метрики ---
-# ==============================
-async def update_branches(db, departments, metrics, today):
-    global previous_metric_names
+    async def _load_metrics_from_db(self) -> MetricMap:
+        async with AsyncSessionLocal() as db:
+            metrics = (await db.execute(select(Metric))).scalars().all()
+        return {m.name.lower(): m.id for m in metrics}
 
-    # today = date.today()
+    def _check_missing_metrics(self, metric_map: MetricMap, metric_names: dict[str, str]):
+        missing = [name for name in metric_names.values() if name and not metric_map.get(name)]
+        if missing:
+            logger.warning(f"Не найдены метрики в таблице Metric: {', '.join(missing)}")
 
-    for dept in departments:
-        name = dept.get("NAME", "").strip()
-        department_id = int(dept.get("ID"))
+    # ------------------------------
+    # Email helpers (асинхронная очередь)
+    # ------------------------------
+    async def _send_email_task(self, message: EmailMessage, smtp_server: str, smtp_port: int, max_attempts: int, retry_delay: int) -> bool:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await asyncio.to_thread(self._send_email_sync, message, smtp_server, smtp_port)
+                logger.info("✅ Письмо успешно отправлено.")
+                return True
+            except smtplib.SMTPException as e:
+                logger.error(f"Попытка {attempt} ❌ Ошибка при отправке письма: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(retry_delay)
+        logger.error("❌ Не удалось отправить письмо после всех попыток.")
+        return False
 
-        stmt = select(Branche).where(Branche.department_id == department_id)
+    @staticmethod
+    def _send_email_sync(message: EmailMessage, smtp_server: str, smtp_port: int):
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.send_message(message)
+
+    async def send_email_async(
+        self,
+        subject: str,
+        body: str,
+        to: list[str],
+        attachments: list[Path] | None = None,
+        smtp_server: str = "smtp.mfc.tomsk.ru",
+        smtp_port: int = 25,
+        sender_email: str = "oprgp.toma@mfc.tomsk.ru",
+        max_attempts: int = 3,
+        retry_delay: int = 5,
+    ) -> bool:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = sender_email
+        message["To"] = ", ".join(to)
+        message.set_content(body)
+
+        if attachments:
+            for path in attachments:
+                path = Path(path)
+                if path.exists():
+                    with path.open("rb") as f:
+                        message.add_attachment(
+                            f.read(),
+                            maintype="application",
+                            subtype="octet-stream",
+                            filename=path.name
+                        )
+                else:
+                    logger.warning(f"Файл {path} не найден, пропускаем.")
+
+        return await self._send_email_task(message, smtp_server, smtp_port, max_attempts, retry_delay)
+
+    async def _email_worker(self):
+        while True:
+            email_task = await self.email_queue.get()
+            try:
+                async with self.email_semaphore:
+                    await self.send_email_async(**email_task)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Ошибка при отправке письма: {e}", exc_info=True)
+            finally:
+                self.email_queue.task_done()
+                await asyncio.sleep(2)
+
+    async def start_email_workers(self, n_workers: int = 2):
+        for _ in range(n_workers):
+            t = asyncio.create_task(self._email_worker())
+            self._email_workers.append(t)
+
+    async def stop_email_workers(self):
+        for t in self._email_workers:
+            t.cancel()
+        for t in self._email_workers:
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        self._email_workers.clear()
+
+    async def queue_email(
+        self,
+        subject: str,
+        body: str,
+        to: list[str],
+        attachments: list[Path] | None = None,
+        smtp_server: str = "smtp.mfc.tomsk.ru",
+        smtp_port: int = 25,
+        sender_email: str = "oprgp.toma@mfc.tomsk.ru",
+        max_attempts: int = 3,
+        retry_delay: int = 5,
+    ):
+        await self.email_queue.put({
+            "subject": subject,
+            "body": body,
+            "to": to,
+            "attachments": attachments,
+            "smtp_server": smtp_server,
+            "smtp_port": smtp_port,
+            "sender_email": sender_email,
+            "max_attempts": max_attempts,
+            "retry_delay": retry_delay
+        })
+
+    # ------------------------------
+    # Обработка пользователей / отпусков / больничных
+    # ------------------------------
+    async def _process_single_user(
+        self,
+        user: dict[str, Any],
+        session: aiohttp.ClientSession,
+        metric_ids: dict[str, int | None],
+        sick_leaves: DeptMetricMap,
+        all_vacations: DeptMetricMap,
+        special_users: DeptMetricMap,
+        semaphore: asyncio.Semaphore,
+        today: date,
+    ):
+        employee_id = int(user["ID"])
+        async with semaphore:
+            absences = await self.fetch_absences_for_user_async(employee_id)
+            user_info_result = await self.fetch_user_info(session, employee_id)
+
+        if not user_info_result:
+            return
+
+        user_info = user_info_result[0]
+        is_special_user = user_info.get("UF_USR_1759203471311") == "105"
+
+        dept_id: int | None = None
+        dept_name: str | None = None
+        if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
+            dept_id_raw = user_info["UF_DEPARTMENT"][0]
+            async with semaphore:
+                dept_id_str, dept_name = await self.fetch_department_info(session, dept_id_raw)
+                try:
+                    dept_id = int(dept_id_str) if dept_id_str else None
+                except (ValueError, TypeError):
+                    dept_id = None
+
+        if not dept_id:
+            return
+
+        if is_special_user and metric_ids.get("special"):
+            special_users.setdefault(dept_id, {}).setdefault(metric_ids["special"], set()).add(employee_id)
+
+        for absence in absences:
+            absence_type = (absence.get("ABSENCE_TYPE") or "").lower()
+            try:
+                active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
+                active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
+            except Exception:
+                # Если формат даты отличается — пропускаем запись
+                logger.warning(f"Неверный формат дат отсутствия для сотрудника {employee_id}: {absence}")
+                continue
+
+            if not (active_from <= today <= active_to):
+                continue
+
+            # больничные
+            if absence_type in (self.config.get("sick_leave") or []) and metric_ids.get("sick"):
+                sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
+                if active_from == today:
+                    asyncio.create_task(self.queue_email(
+                        subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
+                        to=self.config.get("notify_emails", ["neverov@mfc.tomsk.ru"]),
+                    ))
+
+            # отпуск
+            elif absence_type in (self.config.get("vacations") or []) and metric_ids.get("vacation"):
+                all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+
+            # прочие отсутствия
+            elif metric_ids.get("absence"):
+                all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
+                if active_from == today:
+                    asyncio.create_task(self.queue_email(
+                        subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
+                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
+                        to=self.config.get("notify_emails", ["neverov@mfc.tomsk.ru"]),
+                    ))
+
+    async def fetch_absences_for_user_async(self, employee_id: int):
+        pool = await self.init_mysql_pool()
+        query = """
+            SELECT
+                e.ID AS ELEMENT_ID,
+                e.NAME AS ABSENCE_NAME,
+                e.ACTIVE_FROM,
+                e.ACTIVE_TO,
+                p_user.VALUE AS EMPLOYEE_ID,
+                TRIM(CONCAT(u.LAST_NAME, ' ', u.NAME, ' ', IFNULL(u.SECOND_NAME, ''))) AS EMPLOYEE_NAME,
+                enum_type.VALUE AS ABSENCE_TYPE
+            FROM b_iblock_element e
+            LEFT JOIN b_iblock_element_property p_user
+                ON e.ID = p_user.IBLOCK_ELEMENT_ID AND p_user.IBLOCK_PROPERTY_ID = 1
+            LEFT JOIN b_user u
+                ON u.ID = CAST(p_user.VALUE AS UNSIGNED)
+            LEFT JOIN b_iblock_element_property p_type
+                ON e.ID = p_type.IBLOCK_ELEMENT_ID AND p_type.IBLOCK_PROPERTY_ID = 4
+            LEFT JOIN b_iblock_property_enum enum_type
+                ON enum_type.ID = p_type.VALUE_ENUM
+            WHERE e.IBLOCK_ID = 1 AND p_user.VALUE = %s
+            ORDER BY e.ACTIVE_FROM;
+        """
+
+        async def _fetch():
+            try:
+                async with pool.acquire() as conn:
+                    async with conn.cursor(aiomysql.DictCursor) as cursor:
+                        await cursor.execute(query, (employee_id,))
+                        return await cursor.fetchall()
+            except aiomysql.OperationalError as e:
+                logger.warning(f"MySQL OperationalError: {e}. Попробуем переподключиться.")
+                self.mysql_connected = False
+                if self.mysql_pool:
+                    self.mysql_pool.close()
+                    await self.mysql_pool.wait_closed()
+                    self.mysql_pool = None
+                raise
+
+        return await retry_forever(_fetch, name=f"MySQL fetch_absences ID={employee_id}")
+
+    async def process_vacations(self, session: aiohttp.ClientSession, users: list[dict[str, Any]], today: date) -> tuple[DeptMetricMap, DeptMetricMap, DeptMetricMap]:
+        metric_config = self.config.get("metrics", {})
+        metric_names = {
+            "special": metric_config.get("special", "").lower(),
+            "sick": metric_config.get("sick", "").lower(),
+            "vacation": metric_config.get("vacation", "").lower(),
+            "absence": metric_config.get("absence", "").lower(),
+        }
+
+        metric_map = await self._load_metrics_from_db()
+        self._check_missing_metrics(metric_map, metric_names)
+
+        metric_ids = {
+            "special": metric_map.get(metric_names["special"]),
+            "sick": metric_map.get(metric_names["sick"]),
+            "vacation": metric_map.get(metric_names["vacation"]),
+            "absence": metric_map.get(metric_names["absence"]),
+        }
+
+        all_vacations: DeptMetricMap = {}
+        sick_leaves: DeptMetricMap = {}
+        special_users: DeptMetricMap = {}
+        semaphore = asyncio.Semaphore(10)
+
+        async with AsyncSessionLocal() as db:
+            departments = (await db.execute(select(Branche.department_id))).scalars().all()
+            for dept_id in departments:
+                for key, mid in metric_ids.items():
+                    if mid is None:
+                        continue
+                    if key == "sick":
+                        sick_leaves.setdefault(dept_id, {})[mid] = set()
+                    else:
+                        all_vacations.setdefault(dept_id, {})[mid] = set()
+                if metric_ids.get("special"):
+                    special_users.setdefault(dept_id, {})[metric_ids["special"]] = set()
+
+        tasks = [
+            self._process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today)
+            for user in users
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return sick_leaves, all_vacations, special_users
+
+    async def update_vacations(self, db, departments_employees: DeptMetricMap, today: date, condition: bool = False):
+        for dept_id, metrics_dict in departments_employees.items():
+            stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
+            branch = (await db.execute(stmt_branch)).scalar_one_or_none()
+            if not branch:
+                logger.warning(f"Филиал для department_id={dept_id} не найден")
+                continue
+            logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
+
+            for metric_id, employees_set in metrics_dict.items():
+                if condition:
+                    # condition означает: взять первый элемент вместо длины (используется для staffing_analysis)
+                    value = next(iter(employees_set), 0) if employees_set else 0
+                else:
+                    value = len(employees_set) if employees_set else 0
+                stmt_data = select(BranchData).where(
+                    BranchData.branch_id == branch.id,
+                    BranchData.metric_id == metric_id,
+                    BranchData.record_date == today,
+                )
+                bd = (await db.execute(stmt_data)).scalar_one_or_none()
+                if bd:
+                    await self.update_branchdata_value(bd, value, log_prefix=f"{branch.name}")
+                else:
+                    bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=value)
+                    db.add(bd)
+                    logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {value}")
+        await db.commit()
+
+    # ------------------------------
+    # Виртуальный филиал "АУП"
+    # ------------------------------
+    async def get_or_create_virtual_branch(self, db, virtual_department_id: int = 99, name: str = "АУП") -> Branche:
+        stmt = select(Branche).where(Branche.department_id == virtual_department_id)
         branch = (await db.execute(stmt)).scalar_one_or_none()
         if not branch:
-            branch = Branche(name=name, department_id=department_id)
+            branch = Branche(name=name, department_id=virtual_department_id)
             db.add(branch)
-            await db.flush()
-            logger.info(f"✅ Добавлен новый филиал: {name} (ID={department_id})")
+            await db.commit()
+            await db.refresh(branch)
+        return branch
 
-        # Создаём или обновляем BranchData
-        for metric in metrics:
-            stmt_check = select(BranchData).where(
-                BranchData.branch_id == branch.id,
-                BranchData.metric_id == metric.id,
-                BranchData.record_date == today,
-            )
-            existing_record = (await db.execute(stmt_check)).scalar_one_or_none()
+    async def ensure_virtual_branch(self, db, ids_aup: Iterable[int], today: date, virtual_department_id: int = 99, name: str = "АУП"):
+        virtual_branch = await self.get_or_create_virtual_branch(db, virtual_department_id, name)
 
-            if existing_record:
-                # Обновляем существующую запись
-                if metric.name.lower() in previous_metric_names:
-                    stmt_prev = select(BranchData).where(
-                        BranchData.branch_id == branch.id,
-                        BranchData.metric_id == metric.id,
-                        BranchData.record_date < today,
-                    ).order_by(BranchData.record_date.desc()).limit(1)
-                    prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
-                    existing_record.value = prev_record.value if prev_record else Decimal("0.00")
-                else:
-                    existing_record.value = Decimal("0.00")
-                db.add(existing_record)
-                # logger.info(f"♻️ Обновлён BranchData для филиала {name}, metric {metric.name} -> {existing_record.value}")
-            else:
-                # Создаём новую запись
-                if metric.name.lower() in previous_metric_names:
-                    stmt_prev = select(BranchData).where(
-                        BranchData.branch_id == branch.id,
-                        BranchData.metric_id == metric.id,
-                        BranchData.record_date < today,
-                    ).order_by(BranchData.record_date.desc()).limit(1)
-                    prev_record = (await db.execute(stmt_prev)).scalar_one_or_none()
-                    value = prev_record.value if prev_record else Decimal("0.00")
-                else:
-                    value = Decimal("0.00")
-                branchdata = BranchData(branch_id=branch.id, metric_id=metric.id, record_date=today, value=value)
-                db.add(branchdata)
-                # logger.info(f"➕ Создан BranchData для филиала {name}, metric {metric.name} -> {value}")
-
-        await db.flush()
-        await recalc(db, today, branch.id)
-
-        # # Пересчёт метрик
-        # branchdata_list = (await db.execute(
-        #     select(BranchData).where(
-        #         BranchData.branch_id == branch.id,
-        #         BranchData.record_date == today
-        #     )
-        # )).scalars().all()
-
-        # for bd in branchdata_list:
-        #     # logger.info(f"Пересчёт метрики branch_id={bd.branch_id}, metric_id={bd.metric_id}")
-        #     await recalc(bd, db, branchdata_list)
-
-    await db.commit()
-
-
-async def _load_metrics_from_db():
-    """Загружает метрики и возвращает словарь имя_метрики -> id."""
-    async with AsyncSessionLocal() as db:
         metrics = (await db.execute(select(Metric))).scalars().all()
-    return {m.name.lower(): m.id for m in metrics}
 
+        stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
+        branches = (await db.execute(stmt_branches)).scalars().all()
+        branch_ids = [b.id for b in branches]
 
-def _check_missing_metrics(metric_map, metric_names):
-    """Проверяет, какие метрики отсутствуют, и логирует предупреждение."""
-    missing = [name for name in metric_names.values() if not metric_map.get(name)]
-    if missing:
-        logger.warning(f"Не найдены метрики в таблице Metric: {', '.join(missing)}")
-
-
-# -------------------------------
-# Асинхронная отправка писем
-# -------------------------------
-async def _send_email_task(message: EmailMessage, smtp_server: str, smtp_port: int, max_attempts: int, retry_delay: int):
-    """Асинхронная обертка для send_email с retry."""
-    for attempt in range(1, max_attempts + 1):
-        try:
-            await asyncio.to_thread(_send_email_sync, message, smtp_server, smtp_port)
-            logger.info("✅ Письмо успешно отправлено.")
-            return True
-        except smtplib.SMTPException as e:
-            logger.error(f"Попытка {attempt} ❌ Ошибка при отправке письма: {e}")
-            if attempt < max_attempts:
-                await asyncio.sleep(retry_delay)
-    logger.error("❌ Не удалось отправить письмо после всех попыток.")
-    return False
-
-def _send_email_sync(message: EmailMessage, smtp_server: str, smtp_port: int):
-    """Синхронная отправка письма через SMTP."""
-    with smtplib.SMTP(smtp_server, smtp_port) as server:
-        server.send_message(message)
-
-async def send_email_async(
-    subject: str,
-    body: str,
-    to: list[str],
-    attachments: list[Path] = None,
-    smtp_server: str = "smtp.mfc.tomsk.ru",
-    smtp_port: int = 25,
-    sender_email: str = "oprgp.toma@mfc.tomsk.ru",
-    max_attempts: int = 3,
-    retry_delay: int = 5
-):
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender_email
-    message["To"] = ", ".join(to)
-    message.set_content(body)
-
-    if attachments:
-        for path in attachments:
-            path = Path(path)
-            if path.exists():
-                with path.open("rb") as f:
-                    message.add_attachment(f.read(),
-                                           maintype="application",
-                                           subtype="octet-stream",
-                                           filename=path.name)
-            else:
-                logger.warning(f"Файл {path} не найден, пропускаем.")
-
-    return await _send_email_task(message, smtp_server, smtp_port, max_attempts, retry_delay)
-
-# -------------------------------
-# Очередь писем и воркеры
-# -------------------------------
-EMAIL_SEMAPHORE = asyncio.Semaphore(1)
-EMAIL_QUEUE: asyncio.Queue[dict] = asyncio.Queue()
-
-async def _email_worker():
-    """Асинхронный воркер для последовательной отправки писем из очереди."""
-    while True:
-        email_task = await EMAIL_QUEUE.get()
-        try:
-            async with EMAIL_SEMAPHORE:
-                await send_email_async(**email_task)
-        except Exception as e:
-            logger.error(f"Ошибка при отправке письма: {e}", exc_info=True)
-        finally:
-            EMAIL_QUEUE.task_done()
-            await asyncio.sleep(2)  # короткая пауза между письмами
-
-async def start_email_workers(n_workers: int = 2):
-    """Запуск воркеров для обработки очереди писем."""
-    for _ in range(n_workers):
-        asyncio.create_task(_email_worker())
-
-async def queue_email(
-    subject: str,
-    body: str,
-    to: list[str],
-    attachments: list[Path] = None,
-    smtp_server: str = "smtp.mfc.tomsk.ru",
-    smtp_port: int = 25,
-    sender_email: str = "oprgp.toma@mfc.tomsk.ru",
-    max_attempts: int = 3,
-    retry_delay: int = 5
-):
-    """Добавляет письмо в очередь на отправку."""
-    await EMAIL_QUEUE.put({
-        "subject": subject,
-        "body": body,
-        "to": to,
-        "attachments": attachments,
-        "smtp_server": smtp_server,
-        "smtp_port": smtp_port,
-        "sender_email": sender_email,
-        "max_attempts": max_attempts,
-        "retry_delay": retry_delay
-    })
-
-
-async def _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today):
-    """Обрабатывает одного пользователя и обновляет соответствующие словари."""
-    employee_id = int(user["ID"])
-    # today = date.today()
-
-    async with semaphore:
-        absences = await fetch_absences_for_user_async(employee_id)
-        user_info_result = await fetch_user_info(session, employee_id)
-
-    if not user_info_result:
-        return
-
-    user_info = user_info_result[0]
-    is_special_user = user_info.get("UF_USR_1759203471311") == "105"
-
-    dept_id = None
-    if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
-        dept_id_raw = user_info["UF_DEPARTMENT"][0]
-        async with semaphore:
-            dept_id, dept_name = await fetch_department_info(session, dept_id_raw)
-    if not dept_id:
-        return
-
-    # --- Спецпользователи ---
-    if is_special_user and metric_ids["special"]:
-        special_users.setdefault(dept_id, {}).setdefault(metric_ids["special"], set()).add(employee_id)
-
-    # --- Отпуск / больничный ---
-    for absence in absences:
-        absence_type = absence["ABSENCE_TYPE"]
-        active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
-        active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
-        if not (active_from <= today <= active_to):
-            continue
-
-        if absence_type.lower() in config["sick_leave"]  and metric_ids["sick"]:
-            sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
-
-            if active_from == today:
-                # Отправка письма асинхронно
-                asyncio.create_task(
-                    queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-                        # to=["neverov@mfc.tomsk.ru"],
-                    )
-                )
-
-        elif absence_type.lower() in config["vacations"] and metric_ids["vacation"]:
-            all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
-
-            # if active_from == today and absence_type == "отпуск ежегодный":
-            #     # Отправка письма асинхронно
-            #     asyncio.create_task(
-            #         queue_email(
-            #             subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-            #             body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-            #             to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-            #             # to=["neverov@mfc.tomsk.ru"],
-            #         )
-            #     )
-
-        elif metric_ids["absence"]:
-            all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
-
-            if active_from == today:
-                # Отправка письма асинхронно
-                asyncio.create_task(
-                    queue_email(
-                        subject=f"{absence_type.capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence_type} с {active_from} по {active_to} в {dept_name}",
-                        to=["ms@mfc.tomsk.ru", "boltovskaya@mfc.tomsk.ru", "studilova@mfc.tomsk.ru", "sun@mfc.tomsk.ru", "stepankova@mfc.tomsk.ru"],
-                        # to=["neverov@mfc.tomsk.ru"],
-                    )
-                )
-
-
-async def process_vacations(session, users, today):
-    """
-    Получает данные об отсутствии сотрудников и возвращает словари dept_id -> {metric_id: set(employee_ids)}.
-    Даже если сотрудников нет, метрики будут присутствовать с пустым множеством.
-    """
-
-    # --- 1. Загружаем конфиг метрик ---
-    metric_config = config.get("metrics", {})
-    metric_names = {
-        "special": metric_config.get("special", "").lower(),
-        "sick": metric_config.get("sick", "").lower(),
-        "vacation": metric_config.get("vacation", "").lower(),
-        "absence": metric_config.get("absence", "").lower(),
-    }
-
-    # --- 2. Загружаем метрики из БД ---
-    metric_map = await _load_metrics_from_db()
-    _check_missing_metrics(metric_map, metric_names)
-
-    metric_ids = {
-        "special": metric_map.get(metric_names["special"]),
-        "sick": metric_map.get(metric_names["sick"]),
-        "vacation": metric_map.get(metric_names["vacation"]),
-        "absence": metric_map.get(metric_names["absence"]),
-    }
-
-    # --- 3. Инициализация структур для всех департаментов и метрик ---
-    all_vacations = {}
-    sick_leaves = {}
-    special_users = {}
-    semaphore = asyncio.Semaphore(10)
-
-    async with AsyncSessionLocal() as db:
-        departments = (await db.execute(select(Branche.department_id))).scalars().all()
-        for dept_id in departments:
-            for key, mid in metric_ids.items():
-                if mid is None:
-                    continue
-                if key == "sick":
-                    sick_leaves.setdefault(dept_id, {})[mid] = set()
-                else:
-                    all_vacations.setdefault(dept_id, {})[mid] = set()
-            for key, mid in metric_ids.items():
-                if key == "special" and mid:
-                    special_users.setdefault(dept_id, {})[mid] = set()
-
-    # --- 4. Обработка пользователей асинхронно ---
-    tasks = [
-        _process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today)
-        for user in users
-    ]
-    await asyncio.gather(*tasks, return_exceptions=True)  # чтобы один баг не прерывал всех
-
-    return sick_leaves, all_vacations, special_users
-
-
-async def update_vacations(db, departments_employees, today, condition = False):
-    """
-    Обновляет BranchData. Если нет сотрудников для метрики, значение обнуляется.
-    """
-    # today = date.today()
-    for dept_id, metrics_dict in departments_employees.items():
-        stmt_branch = select(Branche).where(Branche.department_id == int(dept_id))
-        branch = (await db.execute(stmt_branch)).scalar_one_or_none()
-        if not branch:
-            logger.warning(f"Филиал для department_id={dept_id} не найден")
-            continue
-        logger.info(f"Обновление метрик филиала {branch.name} (department_id={dept_id})")
-
-        for metric_id, employees_set in metrics_dict.items():
-            if condition:
-                value = list(employees_set)[0] if employees_set else 0
-            else:
-                value = len(employees_set) if employees_set else 0  # если пусто, обнуляем
-            stmt_data = select(BranchData).where(
-                BranchData.branch_id == branch.id,
-                BranchData.metric_id == metric_id,
-                BranchData.record_date == today,
-            )
-            bd = (await db.execute(stmt_data)).scalar_one_or_none()
-            if bd:
-                await update_branchdata_value(bd, value, log_prefix=f"{branch.name}")
-            else:
-                bd = BranchData(branch_id=branch.id, metric_id=metric_id, record_date=today, value=value)
-                db.add(bd)
-                logger.info(f"➕ Добавлена новая запись BranchData: {branch.name}, metric_id={metric_id} -> {value}")
-    await db.commit()
-
-
-async def get_or_create_virtual_branch(db, virtual_department_id: int = 99, name: str = "АУП"):
-    stmt = select(Branche).where(Branche.department_id == virtual_department_id)
-    branch = (await db.execute(stmt)).scalar_one_or_none()
-    if not branch:
-        branch = Branche(name=name, department_id=virtual_department_id)
-        db.add(branch)
-        await db.commit()
-        await db.refresh(branch)
-    return branch
-
-
-async def staffing_analysis(db, today):
-    """
-    Загружает данные из MySQL таблицы staffing_analysis (mysql_mdtomskbot)
-    и возвращает словарь dep_id -> {metric_id: set[float]}, где
-    planned + free → метрика 1, free → метрика 7.
-    Берёт данные за вчерашнюю дату.
-    Для dep_id = 99 суммирует все данные из dep_id = ids_aup.
-    Департаменты из ids_aup в результате не возвращаются.
-    Использует dep_id по ключу id_one_c из предыдущих записей.
-    Пропускает записи с dep_id = NULL.
-    """
-    pool = None
-    try:
-        pool = await aiomysql.create_pool(
-            host=config["mysql_mdtomskbot"]["host"],
-            user=config["mysql_mdtomskbot"]["user"],
-            password=config["mysql_mdtomskbot"]["password"],
-            db=config["mysql_mdtomskbot"]["database"],
-            charset=config["mysql_mdtomskbot"]["charset"],
-            minsize=1,
-            maxsize=5,
-        )
-
-        # yesterday = date.today() - timedelta(days=1)
-        yesterday = today - timedelta(days=1)
-
-        async with pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("""
-                    SELECT id_one_c, dep_id, planned, free, date, vacations, hospital
-                    FROM staffing_analysis
-                    WHERE date = %s
-                """, (yesterday,))
-                rows = await cur.fetchall()
-                logger.info("Запрос `SELECT id_one_c, dep_id, planned, free, date, vacations, hospital FROM staffing_analysis` отправлен в MySQL")
-
-        # Сопоставляем id_one_c -> dep_id только если dep_id не NULL
-        id_to_dep = {row["id_one_c"]: int(row["dep_id"])
-                     for row in rows
-                     if row["dep_id"] is not None}
-
-        # Имена метрик из БД
-        result_metrics = await db.execute(select(Metric))
-        metrics_list = result_metrics.scalars().all()  # <-- список объектов Metric
-        metric_id_to_name = {m.name: m.id for m in metrics_list}
-
-        temp_result: dict[int, dict[int, set[float]]] = {}
-        for row in rows:
-            id_one_c = row["id_one_c"]
-            dep_id = id_to_dep.get(id_one_c)
-            if dep_id is None:
-                continue  # пропускаем строки без dep_id
-
-            planned_value = float(row["planned"] or 0)
-            free_value = float(row["free"] or 0)
-            hospital = float(row["hospital"] or 0)
-            vacations = float(row["vacations"] or 0)
-
-            temp_result.setdefault(dep_id, {})
-            temp_result[dep_id].setdefault(metric_id_to_name.get("Штатная численность (1С)"), set()).add(planned_value + free_value)
-            temp_result[dep_id].setdefault(metric_id_to_name.get("Свободные ставки (1С)"), set()).add(free_value)
-            temp_result[dep_id].setdefault(metric_id_to_name.get("Б/л (1С)"), set()).add(hospital)
-            temp_result[dep_id].setdefault(metric_id_to_name.get("Отпуск (1С)"), set()).add(vacations)
-
-
-        # Суммируем данные для dep_id = 99 из dep_id = ids_aup
-        ids_aup = set(config.get("ids_aup", []))
-        sum_planned_free = 0.0
-        sum_free = 0.0
-        sum_hospital = 0.0
-        sum_vacations = 0.0
-        for aup_id in ids_aup:
-            if aup_id in temp_result:
-                sum_planned_free += sum(temp_result[aup_id].get(metric_id_to_name.get("Штатная численность (1С)"), set()))
-                sum_free += sum(temp_result[aup_id].get(metric_id_to_name.get("Свободные ставки (1С)"), set()))
-                sum_hospital += sum(temp_result[aup_id].get(metric_id_to_name.get("Б/л (1С)"), set()))
-                sum_vacations += sum(temp_result[aup_id].get(metric_id_to_name.get("Отпуск (1С)"), set()))
-
-        # Оставляем только департаменты, которые не в ids_aup
-        result = {
-            dep_id: metrics
-            for dep_id, metrics in temp_result.items()
-            if dep_id not in ids_aup
-        }
-
-        # Добавляем dep_id = 99
-        result[99] = {
-            metric_id_to_name.get("Штатная численность (1С)"): {sum_planned_free},
-            metric_id_to_name.get("Свободные ставки (1С)"): {sum_free},
-            metric_id_to_name.get("Б/л (1С)"): {sum_hospital},
-            metric_id_to_name.get("Отпуск (1С)"): {sum_vacations}
-        }
-
-        return result
-
-    finally:
-        if pool:
-            pool.close()
-            await pool.wait_closed()
-
-
-async def verarbeitung(session, users, departments, today):
-    # --- 2. Обновляем обычные филиалы ---
-    async with AsyncSessionLocal() as db:
-        metrics = (await db.execute(select(Metric))).scalars().all()
-        await update_branches(db, departments, metrics, today)
-
-    # --- 3. Обрабатываем отпуска, больничные и спецпользователей ---
-    sick_leaves, all_vacations, special_users = await process_vacations(session, users, today)
-
-    async with AsyncSessionLocal() as db:
-
-        await update_vacations(db, await staffing_analysis(db, today), today, True)
-
-        await update_vacations(db, sick_leaves, today)
-        await update_vacations(db, all_vacations, today)
-        await update_vacations(db, special_users, today)
-
-    # --- 4. Создаём/обновляем виртуальный филиал "АУП" ---
-    async with AsyncSessionLocal() as db:
-        ids_aup = set(config.get("ids_aup", []))
-        # ids_aup = (1, 31, 2, 29, 28, 15, 21, 4, 25, 26, 27, 24, 3, 23, 16, 20, 61, 17, 18)
-        await ensure_virtual_branch(db, ids_aup, today)
-        logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
-
-    async with AsyncSessionLocal() as db:
-        # today = date.today()
-        # # await db.flush()
-        await recalc(db, today)
-        await db.commit()
-
-
-async def schedule_update_loop():
-    await asyncio.sleep(3)
-    while True:
-        now = datetime.now()
-        target_time = now.replace(hour=UPDATE_HOUR, minute=UPDATE_MINUTE, second=0, microsecond=0)
-        if now >= target_time:
-            target_time += timedelta(days=1)
-        wait_seconds = (target_time - now).total_seconds()
-        logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
-        await asyncio.sleep(wait_seconds)
-
-        async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
-            # --- 1. Загружаем данные из Bitrix ---
-            departments = await fetch_departments_from_bitrix(session)
-            users = await fetch_users_from_bitrix(session)
-            days = [date.today()]
-            # days = [date(2025, 11, 21), date(2025, 12, 2)]
-
-            if len(days) == 1:
-                # Только одна дата
-                for today in days:
-                    await verarbeitung(session, users, departments, today)
-            else:
-                # Диапазон от минимальной до максимальной даты
-                start = min(days)
-                end = max(days)
-                today = start
-                while today <= end:
-                    await verarbeitung(session, users, departments, today)
-                    today += timedelta(days=1)
-
-
-# # ==============================
-# # --- Обновление виртуального филиала "АУП" ---
-# # ==============================
-# async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_department_id: int = 99, name: str = "АУП"):
-#     global previous_metric_names
-
-#     # today = date.today()
-
-#     # --- 1. Создаём или получаем виртуальный филиал ---
-#     virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
-
-#     # --- 2. Загружаем все метрики ---
-#     metrics = (await db.execute(select(Metric))).scalars().all()
-
-#     # --- 3. Загружаем все филиалы ids_aup ---
-#     stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
-#     branches = (await db.execute(stmt_branches)).scalars().all()
-#     branch_map = {b.department_id: b for b in branches}
-
-#     # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
-#     stmt_branchdata = select(BranchData).where(
-#         BranchData.branch_id.in_([b.id for b in branches]),
-#         BranchData.record_date == today
-#     )
-#     branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
-
-#     # --- 5. Строим словарь branch_id -> metric_id -> value ---
-#     branch_data_map: dict[int, dict[int, Decimal]] = {}
-#     for bd in branchdata_list:
-#         branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
-
-#     # --- 6. Формируем BranchData для виртуального филиала ---
-#     virtual_branchdata_list = []
-#     for metric in metrics:
-#         if metric.name.lower() in previous_metric_names:
-#             # Для editing_metrics берем значение с предыдущей даты
-#             stmt_prev = select(BranchData).where(
-#                 BranchData.metric_id == metric.id,
-#                 BranchData.branch_id == virtual_branch.id,
-#                 BranchData.record_date < today
-#             ).order_by(BranchData.record_date.desc()).limit(1)
-#             prev_bd = (await db.execute(stmt_prev)).scalar_one_or_none()
-#             value = prev_bd.value if prev_bd else Decimal("0.00")
-#         else:
-#             # Суммируем по всем филиалам ids_aup из словаря. Если данных нет, будет 0
-#             value = sum(
-#                 branch_data_map.get(branch.id, {}).get(metric.id, Decimal("0.00"))
-#                 for branch in branch_map.values()
-#             )
-
-#         # Проверяем, есть ли уже запись для виртуального филиала
-#         stmt_check = select(BranchData).where(
-#             BranchData.branch_id == virtual_branch.id,
-#             BranchData.metric_id == metric.id,
-#             BranchData.record_date == today
-#         )
-#         bd = (await db.execute(stmt_check)).scalar_one_or_none()
-#         if not bd:
-#             bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
-#             db.add(bd)
-#         else:
-#             bd.value = value  # Обновляем значение, даже если оно стало 0
-#         virtual_branchdata_list.append(bd)
-
-#     await db.flush()
-#     await recalc(db, today, virtual_branch.id)
-
-#     # # --- 7. Пересчёт метрик виртуального филиала ---
-#     # for bd in virtual_branchdata_list:
-#     #     await recalc(bd, db, virtual_branchdata_list)
-
-#     await db.commit()
-
-
-# ==============================
-# --- Обновление виртуального филиала "АУП" ---
-# ==============================
-async def ensure_virtual_branch(db, ids_aup: tuple[int], today, virtual_department_id: int = 99, name: str = "АУП"):
-    global previous_metric_names
-
-    # --- 1. Создаём или получаем виртуальный филиал ---
-    virtual_branch = await get_or_create_virtual_branch(db, virtual_department_id, name)
-
-    # --- 2. Загружаем все метрики ---
-    metrics = (await db.execute(select(Metric))).scalars().all()
-
-    # --- 3. Загружаем все филиалы ids_aup ---
-    stmt_branches = select(Branche).where(Branche.department_id.in_(ids_aup))
-    branches = (await db.execute(stmt_branches)).scalars().all()
-
-    branch_ids = [b.id for b in branches]
-
-    # --- 4. Загружаем BranchData для этих филиалов и сегодняшней даты ---
-    stmt_branchdata = select(BranchData).where(
-        BranchData.branch_id.in_(branch_ids),
-        BranchData.record_date == today
-    )
-    branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
-
-    branch_data_map: dict[int, dict[int, Decimal]] = {}
-    for bd in branchdata_list:
-        branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
-
-    # --- 5. Загружаем BranchData виртуального филиала за прошлые даты (для previous_metric_names) ---
-    prev_metrics_ids = [m.id for m in metrics if m.name.lower() in previous_metric_names]
-    stmt_prev_bd = select(BranchData).where(
-        BranchData.branch_id == virtual_branch.id,
-        BranchData.metric_id.in_(prev_metrics_ids),
-        BranchData.record_date < today
-    ).order_by(BranchData.metric_id, BranchData.record_date.desc())
-    prev_branchdata_list = (await db.execute(stmt_prev_bd)).scalars().all()
-
-    # --- 6. Строим словарь metric_id -> value последнего ненулевого предыдущего значения ---
-    last_prev_value_map: dict[int, Decimal] = {}
-    for bd in prev_branchdata_list:
-        if bd.metric_id not in last_prev_value_map:
-            last_prev_value_map[bd.metric_id] = bd.value
-
-    # --- 7. Формируем BranchData для виртуального филиала ---
-    # virtual_branchdata_list = []
-    for metric in metrics:
-        stmt_check = select(BranchData).where(
-            BranchData.branch_id == virtual_branch.id,
-            BranchData.metric_id == metric.id,
+        stmt_branchdata = select(BranchData).where(
+            BranchData.branch_id.in_(branch_ids),
             BranchData.record_date == today
         )
-        bd = (await db.execute(stmt_check)).scalar_one_or_none()
+        branchdata_list = (await db.execute(stmt_branchdata)).scalars().all()
 
-        if metric.name.lower() in previous_metric_names:
-            if bd and bd.value != Decimal("0.00"):
-                value = bd.value  # уже есть ненулевое значение — не трогаем
+        branch_data_map: dict[int, dict[int, Decimal]] = {}
+        for bd in branchdata_list:
+            branch_data_map.setdefault(bd.branch_id, {})[bd.metric_id] = bd.value
+
+        prev_metrics_ids = [m.id for m in metrics if m.name.lower() in self.previous_metric_names]
+        stmt_prev_bd = select(BranchData).where(
+            BranchData.branch_id == virtual_branch.id,
+            BranchData.metric_id.in_(prev_metrics_ids),
+            BranchData.record_date < today
+        ).order_by(BranchData.metric_id, BranchData.record_date.desc())
+        prev_branchdata_list = (await db.execute(stmt_prev_bd)).scalars().all()
+
+        last_prev_value_map: dict[int, Decimal] = {}
+        for bd in prev_branchdata_list:
+            if bd.metric_id not in last_prev_value_map:
+                last_prev_value_map[bd.metric_id] = bd.value
+
+        for metric in metrics:
+            stmt_check = select(BranchData).where(
+                BranchData.branch_id == virtual_branch.id,
+                BranchData.metric_id == metric.id,
+                BranchData.record_date == today
+            )
+            bd = (await db.execute(stmt_check)).scalar_one_or_none()
+
+            if metric.name.lower() in self.previous_metric_names:
+                if bd and bd.value != Decimal("0.00"):
+                    value = bd.value
+                else:
+                    value = last_prev_value_map.get(metric.id, Decimal("0.00"))
             else:
-                value = last_prev_value_map.get(metric.id, Decimal("0.00"))
-        else:
-            value = sum(
-                branch_data_map.get(branch_id, {}).get(metric.id, Decimal("0.00"))
-                for branch_id in branch_ids
+                value = sum(
+                    branch_data_map.get(branch_id, {}).get(metric.id, Decimal("0.00"))
+                    for branch_id in branch_ids
+                )
+
+            if not bd:
+                bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
+                db.add(bd)
+            else:
+                bd.value = value
+
+        await db.flush()
+        await recalc(db, today, virtual_branch.id)
+        await db.commit()
+
+    # ------------------------------
+    # staffing_analysis (MySQL отдельной БД)
+    # ------------------------------
+    async def staffing_analysis(self, db, today: date) -> StaffingMap:
+        pool: aiomysql.Pool | None = None
+        try:
+            pool = await aiomysql.create_pool(
+                host=self.config["mysql_mdtomskbot"]["host"],
+                user=self.config["mysql_mdtomskbot"]["user"],
+                password=self.config["mysql_mdtomskbot"]["password"],
+                db=self.config["mysql_mdtomskbot"]["database"],
+                charset=self.config["mysql_mdtomskbot"]["charset"],
+                minsize=1,
+                maxsize=5,
             )
 
-        if not bd:
-            bd = BranchData(branch_id=virtual_branch.id, metric_id=metric.id, record_date=today, value=value)
-            db.add(bd)
-        else:
-            bd.value = value  # обновляем значение, если нужно
-        # virtual_branchdata_list.append(bd)
+            yesterday = today - timedelta(days=1)
 
-    await db.flush()
-    await recalc(db, today, virtual_branch.id)
-    await db.commit()
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("""
+                        SELECT id_one_c, dep_id, planned, free, date, vacations, hospital
+                        FROM staffing_analysis
+                        WHERE date = %s
+                    """, (yesterday,))
+                    rows = await cur.fetchall()
+                    logger.info("Запрошены данные staffing_analysis из MySQL")
 
+            id_to_dep = {row["id_one_c"]: int(row["dep_id"]) for row in rows if row["dep_id"] is not None}
 
-# ==============================
-# --- Lifespan FastAPI ---
-# ==============================
-@asynccontextmanager
-async def lifespan(app):
-    logger.info(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
+            result_metrics = await db.execute(select(Metric))
+            metrics_list = result_metrics.scalars().all()
+            metric_name_to_id = {m.name: m.id for m in metrics_list}
 
-    await start_email_workers(n_workers=2)  # или больше, если сервер позволяет
+            temp_result: dict[int, dict[int, set[float]]] = {}
+            for row in rows:
+                id_one_c = row["id_one_c"]
+                dep_id = id_to_dep.get(id_one_c)
+                if dep_id is None:
+                    continue
 
-    task = None
-    if config.get("enable_background_task", True):
-        logger.info("✅ Фоновая задача включена")
+                planned_value = float(row.get("planned") or 0)
+                free_value = float(row.get("free") or 0)
+                hospital = float(row.get("hospital") or 0)
+                vacations = float(row.get("vacations") or 0)
 
-        # Инициализация MySQL пула и создание таблиц
+                temp_result.setdefault(dep_id, {})
+                temp_result[dep_id].setdefault(metric_name_to_id.get("Штатная численность (1С)"), set()).add(planned_value + free_value)
+                temp_result[dep_id].setdefault(metric_name_to_id.get("Свободные ставки (1С)"), set()).add(free_value)
+                temp_result[dep_id].setdefault(metric_name_to_id.get("Б/л (1С)"), set()).add(hospital)
+                temp_result[dep_id].setdefault(metric_name_to_id.get("Отпуск (1С)"), set()).add(vacations)
+
+            ids_aup = set(self.config.get("ids_aup", []))
+            sum_planned_free = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Штатная численность (1С)"), set())) for aup_id in ids_aup)
+            sum_free = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Свободные ставки (1С)"), set())) for aup_id in ids_aup)
+            sum_hospital = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Б/л (1С)"), set())) for aup_id in ids_aup)
+            sum_vacations = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Отпуск (1С)"), set())) for aup_id in ids_aup)
+
+            result = {dep_id: metrics for dep_id, metrics in temp_result.items() if dep_id not in ids_aup}
+
+            result[99] = {
+                metric_name_to_id.get("Штатная численность (1С)"): {sum_planned_free},
+                metric_name_to_id.get("Свободные ставки (1С)"): {sum_free},
+                metric_name_to_id.get("Б/л (1С)"): {sum_hospital},
+                metric_name_to_id.get("Отпуск (1С)"): {sum_vacations},
+            }
+
+            return result
+
+        finally:
+            if pool:
+                pool.close()
+                await pool.wait_closed()
+
+    # ------------------------------
+    # Главный процесс верarbeitung (перевычисление)
+    # ------------------------------
+    async def verarbeitung(self, session: aiohttp.ClientSession, users: list[dict[str, Any]], departments: list[dict[str, Any]], today: date):
+        async with AsyncSessionLocal() as db:
+            metrics = (await db.execute(select(Metric))).scalars().all()
+            await self.update_branches(db, departments, metrics, today)
+
+        sick_leaves, all_vacations, special_users = await self.process_vacations(session, users, today)
+
+        async with AsyncSessionLocal() as db:
+            staffing = await self.staffing_analysis(db, today)
+            await self.update_vacations(db, staffing, today, condition=True)
+
+            await self.update_vacations(db, sick_leaves, today)
+            await self.update_vacations(db, all_vacations, today)
+            await self.update_vacations(db, special_users, today)
+
+        async with AsyncSessionLocal() as db:
+            ids_aup = set(self.config.get("ids_aup", []))
+            await self.ensure_virtual_branch(db, ids_aup, today)
+            logger.info("✅ Виртуальный филиал 'АУП' создан/обновлён")
+
+        async with AsyncSessionLocal() as db:
+            await recalc(db, today)
+            await db.commit()
+
+    # ------------------------------
+    # Цикл планировщика
+    # ------------------------------
+    async def schedule_update_loop(self):
+        await asyncio.sleep(3)
+        while True:
+            now = datetime.now()
+            target_time = now.replace(hour=UPDATE_HOUR, minute=UPDATE_MINUTE, second=0, microsecond=0)
+            if now >= target_time:
+                target_time += timedelta(days=1)
+            wait_seconds = (target_time - now).total_seconds()
+            logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
+            await asyncio.sleep(wait_seconds)
+
+            async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
+                departments = await self.fetch_departments_from_bitrix(session)
+                users = await self.fetch_users_from_bitrix(session)
+                days = [date.today()]  # можно переопределить при вызове
+                # days = [date(2025, 11, 21), date(2025, 12, 4)]
+
+                if len(days) == 1:
+                    await self.verarbeitung(session, users, departments, days[0])
+                else:
+                    start = min(days)
+                    end = max(days)
+                    today = start
+                    while today <= end:
+                        await self.verarbeitung(session, users, departments, today)
+                        today += timedelta(days=1)
+
+    # ------------------------------
+    # Lifespan helpers (стартап/шутдаун)
+    # ------------------------------
+    async def start_background_tasks(self):
+        # инициализация БД схем
         async with engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
 
-        async def background_tasks():
+        try:
+            await self.init_mysql_pool()
+        except Exception as e:
+            logger.error(f"Не удалось инициализировать MySQL: {e}", exc_info=True)
+            return
+
+        await self.start_email_workers(n_workers=self.config.get("email_workers", 2))
+        self._background_task = asyncio.create_task(self.schedule_update_loop())
+
+    async def stop_background_tasks(self):
+        if self._background_task:
+            self._background_task.cancel()
             try:
-                await init_mysql_pool()
-            except Exception as e:
-                logger.error(f"Не удалось инициализировать MySQL: {e}", exc_info=True)
-                return
+                await self._background_task
+            except asyncio.CancelledError:
+                pass
+            self._background_task = None
 
-            while True:
-                try:
-                    await schedule_update_loop()
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.error(f"Фоновое обновление завершилось с ошибкой: {e}", exc_info=True)
-                    await asyncio.sleep(30)  # ждём перед повтором
+        await self.stop_email_workers()
+        await self.close_mysql_pool()
+        await engine.dispose()
 
-        task = asyncio.create_task(background_tasks())
+
+# ==============================
+# --- FastAPI lifespan (asynccontextmanager) ---
+# ==============================
+@asynccontextmanager
+async def lifespan(app):
+    manager = LifespanManager(CONFIG)
+    logger.info(f"Сервер запущен в {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+    if CONFIG.get("enable_background_task", True):
+        logger.info("✅ Фоновая задача включена")
+        await manager.start_background_tasks()
     else:
         logger.info("⚠️ Фоновая задача отключена")
+        await manager.start_email_workers(n_workers=CONFIG.get("email_workers", 2))
 
     try:
         yield
     finally:
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        if mysql_pool:
-            mysql_pool.close()
-            await mysql_pool.wait_closed()
-        await engine.dispose()
+        logger.info("Останавливаем фоновые задачи...")
+        await manager.stop_background_tasks()

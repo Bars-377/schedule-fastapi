@@ -232,21 +232,33 @@ def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dic
     return table_data
 
 
-async def get_chart_data(branches: list[Branche], metrics: list[Metric], branchdata_rows: list[BranchData], ids_aup: set[int]):
+async def get_chart_data(db: AsyncSession, metric_map, ids_aup: set[int], branches: list[Branche]):
     """Возвращает агрегированные данные для графиков за последний месяц"""
 
-    # Получаем имена метрик из конфигурации
     state_key = config.get("metrics", {}).get("state")
     sick_key = config.get("metrics", {}).get("sick")
     vacation_key = config.get("metrics", {}).get("vacation")
     fact_key = config.get("metrics", {}).get("fact")
 
-    # фильтруем метрики для графиков
-    allowed_metrics = {state_key, sick_key, vacation_key, fact_key}
+    # Оставляем в metric_map только нужные метрики
+    allowed_metrics = {
+        state_key,
+        sick_key,
+        vacation_key,
+        fact_key,
+    }
+
+    # удаляем None на случай, если чего-то нет в конфиге
     allowed_metrics = {m for m in allowed_metrics if m}
 
-    # id -> имя метрики
-    metric_map = {m.id: m.name for m in metrics if m.name in allowed_metrics}
+    # фильтруем metric_map: id -> имя метрики
+    metric_map = {
+        metric_id: name
+        for metric_id, name in metric_map.items()
+        if name in allowed_metrics
+    }
+
+    branchdata_rows = await fetch_branchdata(db)
 
     # Преобразуем список Branche в словарь branch_id -> department_id
     branch_id_to_department = {b.id: b.department_id for b in branches}
@@ -270,8 +282,8 @@ async def get_chart_data(branches: list[Branche], metrics: list[Metric], branchd
     required_metrics = set(metric_map.values())
 
     all_dates = sorted([
-        d for d, metrics_set in date_metrics_present.items()
-        if required_metrics.issubset(metrics_set)
+        d for d, metrics in date_metrics_present.items()
+        if required_metrics.issubset(metrics)
     ])
 
     # только текущий месяц
@@ -313,7 +325,8 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
     totals = calculate_totals(table_data, metrics)
     editing_metrics = config.get("editing_metrics", ())
 
-    chart_data = await get_chart_data(branches, metrics, branchdata_rows, ids_aup)
+    metric_map = {m.id: m.name for m in metrics}
+    chart_data = await get_chart_data(db, metric_map, ids_aup, branches)
 
     return {
         "request": request,
