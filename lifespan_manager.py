@@ -612,7 +612,8 @@ class LifespanManager:
                 if bd and bd.value != Decimal("0.00"):
                     value = bd.value
                 else:
-                    value = last_prev_value_map.get(metric.id, Decimal("0.00"))
+                    prev_value = last_prev_value_map.get(metric.id, Decimal("0.00"))
+                    value = prev_value if prev_value != Decimal("0.00") else Decimal("0.00")
             else:
                 value = sum(
                     branch_data_map.get(branch_id, {}).get(metric.id, Decimal("0.00"))
@@ -687,16 +688,14 @@ class LifespanManager:
             sum_hospital = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Б/л (1С)"), set())) for aup_id in ids_aup)
             sum_vacations = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Отпуск (1С)"), set())) for aup_id in ids_aup)
 
-            result = {dep_id: metrics for dep_id, metrics in temp_result.items() if dep_id not in ids_aup}
-
-            result[99] = {
+            temp_result[99] = {
                 metric_name_to_id.get("Штатная численность (1С)"): {sum_planned_free},
                 metric_name_to_id.get("Свободные ставки (1С)"): {sum_free},
                 metric_name_to_id.get("Б/л (1С)"): {sum_hospital},
                 metric_name_to_id.get("Отпуск (1С)"): {sum_vacations},
             }
 
-            return result
+            return temp_result
 
         finally:
             if pool:

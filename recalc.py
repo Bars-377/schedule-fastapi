@@ -93,18 +93,57 @@ async def _calc_metric8(branch_id: int, db: AsyncSession, cache_metric: Decimal,
 # -------------------- Логика обновления ------------------
 # ---------------------------------------------------------
 
+# async def _apply_updates(branchdata_list, new_values, message, db: AsyncSession):
+#     """Применение обновлённых значений в базу."""
+#     if not message:
+#         for bd in branchdata_list:
+#             bd.value = new_values.get(bd.id, bd.value)
+#             db.add(bd)
+#     else:
+#         # Обнуляем определённые индексы при ошибках
+#         for i, bd in enumerate(branchdata_list):
+#             if i in (0, 2, 3, 9):
+#                 bd.value = Decimal("0")
+#                 db.add(bd)
+
 async def _apply_updates(branchdata_list, new_values, message, db: AsyncSession):
     """Применение обновлённых значений в базу."""
+    # Если нет ошибок — просто обновляем значения
     if not message:
         for bd in branchdata_list:
             bd.value = new_values.get(bd.id, bd.value)
             db.add(bd)
-    else:
-        # Обнуляем определённые индексы при ошибках
-        for i, bd in enumerate(branchdata_list):
-            if i in (0, 2, 3, 7):
-                bd.value = Decimal("0")
-                db.add(bd)
+        return
+
+    # Если есть ошибка — нужно обнулить определённые метрики
+    # --------------------------------------------------------
+
+    # Получаем названия метрик из конфигурации
+    cfg = config.get("metrics", {})
+
+    metric_names_to_zero = set()
+
+    # config["metrics"] = { "state": "Штатная...", "fact": "Фактическое...", ... }
+    for key in ("state", "fact", "fact_state", "quarter"):
+        name = cfg.get(key)
+        if name:
+            metric_names_to_zero.add(name)
+
+    if not metric_names_to_zero:
+        # Нет названий в конфиге — ничего не обнуляем
+        return
+
+    # Ищем id метрик по их названиям в таблице Metric
+    result = await db.execute(
+        select(Metric.id).where(Metric.name.in_(metric_names_to_zero))
+    )
+    metric_ids_to_zero = {row[0] for row in result.all()}
+
+    # Теперь проходим по branchdata_list и обнуляем нужные метрики
+    for bd in branchdata_list:
+        if bd.metric_id in metric_ids_to_zero:
+            bd.value = Decimal("0")
+            db.add(bd)
 
 
 async def _calculate_new_values(
