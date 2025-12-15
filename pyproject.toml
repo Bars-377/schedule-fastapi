@@ -1,5 +1,6 @@
-[tool.ruff]
+[tool.ruff.lint]
 # Основные настройки
+[tool.black]
 line-length = 88
 indent-width = 4
 target-version = "py312"
@@ -33,4 +34,4 @@ ignore = [
 src = ["main.py"]
 
 # Файлы и каталоги, которые нужно исключить
-exclude = ["main copy.py"]
+exclude = ["main lifespan_manager_copy.py"]

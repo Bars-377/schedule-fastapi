@@ -18,7 +18,7 @@ import logging
 import smtplib
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 from decimal import Decimal
 from email.message import EmailMessage
 from pathlib import Path
@@ -262,6 +262,7 @@ class LifespanManager:
             try:
                 await asyncio.to_thread(self._send_email_sync, message, smtp_server, smtp_port)
                 logger.info("✅ Письмо успешно отправлено.")
+                await asyncio.sleep(retry_delay)
                 return True
             except smtplib.SMTPException as e:
                 logger.error(f"Попытка {attempt} ❌ Ошибка при отправке письма: {e}")
@@ -376,6 +377,11 @@ class LifespanManager:
         semaphore: asyncio.Semaphore,
         today: date,
     ):
+        # yesterday = today - timedelta(days=1)
+        yesterday_10 = datetime.combine(
+            today - timedelta(days=1),
+            time(hour=10, minute=0)
+        )
         employee_id = int(user["ID"])
         async with semaphore:
             absences = await self.fetch_absences_for_user_async(employee_id)
@@ -407,8 +413,10 @@ class LifespanManager:
         for absence in absences:
             absence_type = (absence.get("ABSENCE_TYPE") or "").lower()
             try:
-                active_from = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S").date()
-                active_to = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S").date()
+                active_from_dt = datetime.strptime(str(absence["ACTIVE_FROM"]), "%Y-%m-%d %H:%M:%S")
+                active_to_dt = datetime.strptime(str(absence["ACTIVE_TO"]), "%Y-%m-%d %H:%M:%S")
+                active_from = active_from_dt.date()
+                active_to = active_to_dt.date()
             except Exception:
                 # Если формат даты отличается — пропускаем запись
                 logger.warning(f"Неверный формат дат отсутствия для сотрудника {employee_id}: {absence}")
@@ -417,10 +425,15 @@ class LifespanManager:
             if not (active_from <= today <= active_to):
                 continue
 
+            # уведомление отправляем:
+            # - если начало сегодня
+            # - или начало вчера после 10:00
+            send_notification = active_from == today or (active_from == today - timedelta(days=1) and active_from_dt >= yesterday_10)
+
             # больничные
             if absence_type in (self.config.get("sick_leave") or []) and metric_ids.get("sick"):
                 sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
-                if active_from == today:
+                if send_notification:
                     asyncio.create_task(self.queue_email(
                         subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
                         body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
@@ -434,7 +447,7 @@ class LifespanManager:
             # прочие отсутствия
             elif metric_ids.get("absence"):
                 all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
-                if active_from == today:
+                if send_notification:
                     asyncio.create_task(self.queue_email(
                         subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
                         body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
@@ -683,6 +696,7 @@ class LifespanManager:
                 temp_result[dep_id].setdefault(metric_name_to_id.get("Отпуск (1С)"), set()).add(vacations)
 
             ids_aup = set(self.config.get("ids_aup", []))
+            ids_aup.add(99)
             sum_planned_free = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Штатная численность (1С)"), set())) for aup_id in ids_aup)
             sum_free = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Свободные ставки (1С)"), set())) for aup_id in ids_aup)
             sum_hospital = sum(sum(temp_result.get(aup_id, {}).get(metric_name_to_id.get("Б/л (1С)"), set())) for aup_id in ids_aup)
