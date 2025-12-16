@@ -39,10 +39,18 @@
                     <th>
                         {% if metric.name|length > 15 and user.id == 1 %}
                         <span class="short-text">{{ metric.name[:15] }}...</span>
-                        <span class="full-text" style="display:none;">{{ metric.name }}</span>
+                        <span class="full-text" style="display:none;">
+                            {{ metric.name }}
+                            {% if previous_date and ("Б/л" in metric.name or "Отпуск" in metric.name) %}
+                            <br><small>{{ previous_date }}</small>
+                            {% endif %}
+                        </span>
                         <span class="toggle-button" onclick="toggleText(this)">Показать</span>
                         {% else %}
                         {{ metric.name }}
+                        {% if previous_date and ("Б/л" in metric.name or "Отпуск" in metric.name) %}
+                        <br><small>{{ previous_date }}</small>
+                        {% endif %}
                         {% endif %}
 
                         {% if user.id in (1, 2) %}

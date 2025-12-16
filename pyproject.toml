@@ -1,5 +1,6 @@
 [tool.ruff.lint]
 # Основные настройки
+
 [tool.black]
 line-length = 88
 indent-width = 4

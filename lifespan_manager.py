@@ -18,7 +18,7 @@ import logging
 import smtplib
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from email.message import EmailMessage
 from pathlib import Path
@@ -54,8 +54,10 @@ BITRIX_USER_LIST_URL = f"{BITRIX_BASE_URL}/user.get.json?ADMIN_MODE=True&SORT=ID
 BITRIX_USER_INFO_URL = f"{BITRIX_BASE_URL}/user.get.json?id={{user_id}}"
 BITRIX_DEPARTMENT_URL = f"{BITRIX_BASE_URL}/department.get.json?ID={{dept_id}}"
 
-UPDATE_HOUR = CONFIG.get("update_hour", 10)
-UPDATE_MINUTE = CONFIG.get("update_minute", 0)
+UPDATE_HOUR_ONE = CONFIG.get("update_hour_one", 10)
+UPDATE_MINUTE_ONE = CONFIG.get("update_minute_one", 0)
+UPDATE_HOUR_TWO = CONFIG.get("update_hour_two", 16)
+UPDATE_MINUTE_TWO = CONFIG.get("update_minute_two", 0)
 
 MYSQL_CONFIG = {
     "host": CONFIG["mysql"]["host"],
@@ -377,11 +379,6 @@ class LifespanManager:
         semaphore: asyncio.Semaphore,
         today: date,
     ):
-        # yesterday = today - timedelta(days=1)
-        yesterday_10 = datetime.combine(
-            today - timedelta(days=1),
-            time(hour=10, minute=0)
-        )
         employee_id = int(user["ID"])
         async with semaphore:
             absences = await self.fetch_absences_for_user_async(employee_id)
@@ -410,6 +407,12 @@ class LifespanManager:
         if is_special_user and metric_ids.get("special"):
             special_users.setdefault(dept_id, {}).setdefault(metric_ids["special"], set()).add(employee_id)
 
+        now = datetime.now()
+
+        SEND_AT_10 = time(10, 0)
+        SEND_AT_16 = time(16, 0)
+        SEND_WINDOW = timedelta(minutes=5)  # защита от дублей
+
         for absence in absences:
             absence_type = (absence.get("ABSENCE_TYPE") or "").lower()
             try:
@@ -422,37 +425,74 @@ class LifespanManager:
                 logger.warning(f"Неверный формат дат отсутствия для сотрудника {employee_id}: {absence}")
                 continue
 
-            if not (active_from <= today <= active_to):
+            cont = False
+
+            if (active_from <= today - timedelta(days=1) <= active_to):
+                # больничные
+                if absence_type in (self.config.get("sick_leave") or []) and metric_ids.get("sick"):
+                    sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
+
+                # отпуск
+                elif absence_type in (self.config.get("vacations") or []) and metric_ids.get("vacation"):
+                    cont = True
+                    all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+
+                # прочие отсутствия
+                elif metric_ids.get("absence"):
+                    all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
+
+            # ---------------- уведомления ----------------
+
+            date_create_str = absence.get("DATE_CREATE")
+            try:
+                date_create_dt = datetime.strptime(str(date_create_str), "%Y-%m-%d %H:%M:%S")
+            except Exception:
                 continue
 
-            # уведомление отправляем:
-            # - если начало сегодня
-            # - или начало вчера после 10:00
-            send_notification = active_from == today or (active_from == today - timedelta(days=1) and active_from_dt >= yesterday_10)
+            create_time = date_create_dt.time()
+            create_date = date_create_dt.date()
 
-            # больничные
-            if absence_type in (self.config.get("sick_leave") or []) and metric_ids.get("sick"):
-                sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
-                if send_notification:
-                    asyncio.create_task(self.queue_email(
-                        subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
-                        to=self.config.get("notify_emails", ["neverov@mfc.tomsk.ru"]),
-                    ))
+            # ---- вычисляем единственный момент отправки ----
 
-            # отпуск
-            elif absence_type in (self.config.get("vacations") or []) and metric_ids.get("vacation"):
-                all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+            if create_time >= SEND_AT_16:
+                # с 16:00 до 23:59 → 10:00 следующего дня
+                send_dt = datetime.combine(create_date + timedelta(days=1), SEND_AT_10)
 
-            # прочие отсутствия
-            elif metric_ids.get("absence"):
-                all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
-                if send_notification:
-                    asyncio.create_task(self.queue_email(
-                        subject=f"{absence.get('ABSENCE_NAME', '').capitalize()} {user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} в {dept_name or ''}",
-                        body=f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')} {user_info.get('SECOND_NAME', '')} - {absence.get('ABSENCE_NAME', '')} с {active_from} по {active_to} в {dept_name or ''}",
-                        to=self.config.get("notify_emails", ["neverov@mfc.tomsk.ru"]),
-                    ))
+            elif create_time < SEND_AT_10:
+                # с 00:00 до 09:59 → 10:00 этого дня
+                send_dt = datetime.combine(create_date, SEND_AT_10)
+
+            else:
+                # с 10:00 до 15:59 → 16:00 этого дня
+                send_dt = datetime.combine(create_date, SEND_AT_16)
+
+            # ---- защита от дублей ----
+
+            if not (send_dt <= now < send_dt + SEND_WINDOW):
+                continue
+
+            if cont:
+                continue
+
+            asyncio.create_task(self.queue_email(
+                subject=(
+                    f"{absence.get('ABSENCE_NAME', '').capitalize()} "
+                    f"{user_info.get('LAST_NAME', '')} "
+                    f"{user_info.get('NAME', '')} "
+                    f"{user_info.get('SECOND_NAME', '')} "
+                    f"в {dept_name or ''}"
+                ),
+                body=(
+                    f"{user_info.get('LAST_NAME', '')} "
+                    f"{user_info.get('NAME', '')} "
+                    f"{user_info.get('SECOND_NAME', '')} — "
+                    f"{absence.get('ABSENCE_NAME', '')} "
+                    f"с {active_from} по {active_to} "
+                    f"в {dept_name or ''}. "
+                    f"Дата внесения {absence.get('DATE_CREATE', '')}"
+                ),
+                to=self.config.get("notify_emails", ["neverov@mfc.tomsk.ru"]),
+            ))
 
     async def fetch_absences_for_user_async(self, employee_id: int):
         pool = await self.init_mysql_pool()
@@ -460,6 +500,7 @@ class LifespanManager:
             SELECT
                 e.ID AS ELEMENT_ID,
                 e.NAME AS ABSENCE_NAME,
+                e.DATE_CREATE,
                 e.ACTIVE_FROM,
                 e.ACTIVE_TO,
                 p_user.VALUE AS EMPLOYEE_ID,
@@ -750,10 +791,25 @@ class LifespanManager:
         await asyncio.sleep(3)
         while True:
             now = datetime.now()
-            target_time = now.replace(hour=UPDATE_HOUR, minute=UPDATE_MINUTE, second=0, microsecond=0)
-            if now >= target_time:
-                target_time += timedelta(days=1)
-            wait_seconds = (target_time - now).total_seconds()
+
+            # задаем два времени обновления на сегодня
+            target_times = [
+                now.replace(hour=UPDATE_HOUR_ONE, minute=UPDATE_MINUTE_ONE, second=0, microsecond=0),
+                now.replace(hour=UPDATE_HOUR_TWO, minute=UPDATE_MINUTE_TWO, second=0, microsecond=0)
+            ]
+
+            # выбираем ближайшее будущее время
+            future_times = [t for t in target_times if t > now]
+            if not future_times:
+                # если оба времени уже прошли, ставим на завтра
+                target_times = [
+                    (target_times[0] + timedelta(days=1)),
+                    (target_times[1] + timedelta(days=1))
+                ]
+                future_times = target_times
+
+            next_update = min(future_times)
+            wait_seconds = (next_update - now).total_seconds()
             logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
             await asyncio.sleep(wait_seconds)
 

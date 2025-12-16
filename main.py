@@ -3,7 +3,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -313,6 +313,8 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
     totals = calculate_totals(table_data, metrics)
     editing_metrics = config.get("editing_metrics", ())
 
+    previous_date = selected_date - timedelta(days=1)
+
     chart_data = await get_chart_data(branches, metrics, branchdata_rows, ids_aup)
 
     return {
@@ -326,6 +328,7 @@ async def get_page_data(request: Request, page: int, db: AsyncSession, user=Depe
         "end_page": end_page,
         "msg": msg,
         "selected_date": selected_date,
+        "previous_date": previous_date,
         "available_dates": available_dates,
         "totals": totals,
         "editing": editing_metrics,
