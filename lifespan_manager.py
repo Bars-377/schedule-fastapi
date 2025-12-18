@@ -413,6 +413,9 @@ class LifespanManager:
         SEND_AT_16 = time(16, 0)
         SEND_WINDOW = timedelta(minutes=5)  # защита от дублей
 
+        vacations = {v.lower() for v in (self.config.get("vacations") or [])}
+        sick_leave = {s.lower() for s in (self.config.get("sick_leave") or [])}
+
         for absence in absences:
             absence_type = (absence.get("ABSENCE_TYPE") or "").lower()
             try:
@@ -429,17 +432,20 @@ class LifespanManager:
 
             if (active_from <= today - timedelta(days=1) <= active_to):
                 # больничные
-                if absence_type in (self.config.get("sick_leave") or []) and metric_ids.get("sick"):
+                if absence_type in sick_leave and metric_ids.get("sick"):
                     sick_leaves.setdefault(dept_id, {}).setdefault(metric_ids["sick"], set()).add(employee_id)
 
                 # отпуск
-                elif absence_type in (self.config.get("vacations") or []) and metric_ids.get("vacation"):
+                elif absence_type in vacations and metric_ids.get("vacation"):
                     cont = True
                     all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
 
                 # прочие отсутствия
                 elif metric_ids.get("absence"):
                     all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
+
+            if cont:
+                continue
 
             # ---------------- уведомления ----------------
 
@@ -469,9 +475,6 @@ class LifespanManager:
             # ---- защита от дублей ----
 
             if not (send_dt <= now < send_dt + SEND_WINDOW):
-                continue
-
-            if cont:
                 continue
 
             asyncio.create_task(self.queue_email(
