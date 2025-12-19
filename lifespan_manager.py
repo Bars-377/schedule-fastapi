@@ -428,8 +428,6 @@ class LifespanManager:
                 logger.warning(f"Неверный формат дат отсутствия для сотрудника {employee_id}: {absence}")
                 continue
 
-            cont = False
-
             if (active_from <= today - timedelta(days=1) <= active_to):
                 # больничные
                 if absence_type in sick_leave and metric_ids.get("sick"):
@@ -437,15 +435,15 @@ class LifespanManager:
 
                 # отпуск
                 elif absence_type in vacations and metric_ids.get("vacation"):
-                    cont = True
                     all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["vacation"], set()).add(employee_id)
+                    continue  # ⛔ больничные — без уведомлений
 
                 # прочие отсутствия
                 elif metric_ids.get("absence"):
                     all_vacations.setdefault(dept_id, {}).setdefault(metric_ids["absence"], set()).add(employee_id)
 
-            if cont:
-                continue
+            if absence_type in vacations:
+                continue  # ⛔ гарантированно исключаем отпуск
 
             # ---------------- уведомления ----------------
 
