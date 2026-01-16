@@ -6,6 +6,25 @@
     <title>Таблица отделов</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <style>
+        .charts-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 30px;
+            width: 90%;
+            margin: auto;
+        }
+
+        .chart-box {
+            flex: 1;
+        }
+
+        @media (max-width: 1200px) {
+            .charts-row {
+                flex-direction: column;
+            }
+        }
+    </style>
 </head>
 
 <body>
@@ -203,12 +222,16 @@
         <div id="save-msg">{{ msg }}</div>
     </div>
 
-    <h3>Графики</h3>
-    <div style="width: 80%; margin: auto;">
-        <canvas id="chartFact" height="200"></canvas>
-    </div>
-    <div style="width: 80%; margin: auto; margin-top: 40px;">
-        <canvas id="chartLeave" height="200"></canvas>
+    <h3 style="text-align:center;">Графики</h3>
+
+    <div class="charts-row">
+        <div class="chart-box">
+            <canvas id="chartFact" height="200"></canvas>
+        </div>
+
+        <div class="chart-box">
+            <canvas id="chartLeave" height="200"></canvas>
+        </div>
     </div>
 
 </body>

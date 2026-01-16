@@ -232,59 +232,74 @@ def build_table(branches: list[Branche], metrics: list[Metric], latest_data: dic
     return table_data
 
 
-async def get_chart_data(branches: list[Branche], metrics: list[Metric], branchdata_rows: list[BranchData], ids_aup: set[int]):
-    """Возвращает агрегированные данные для графиков за последний месяц"""
+async def get_chart_data(
+    branches: list[Branche],
+    metrics: list[Metric],
+    branchdata_rows: list[BranchData],
+    ids_aup: set[int],
+):
+    """Возвращает агрегированные данные для графиков за последние 60 дней"""
 
-    # Получаем имена метрик из конфигурации
+    # --- имена метрик из конфига ---
     state_key = config.get("metrics", {}).get("state")
     sick_key = config.get("metrics", {}).get("sick")
     vacation_key = config.get("metrics", {}).get("vacation")
     fact_key = config.get("metrics", {}).get("fact")
 
-    # фильтруем метрики для графиков
-    allowed_metrics = {state_key, sick_key, vacation_key, fact_key}
-    allowed_metrics = {m for m in allowed_metrics if m}
+    allowed_metric_names = {
+        name for name in (state_key, sick_key, vacation_key, fact_key) if name
+    }
 
     # id -> имя метрики
-    metric_map = {m.id: m.name for m in metrics if m.name in allowed_metrics}
+    metric_id_to_name = {
+        m.id: m.name for m in metrics if m.name in allowed_metric_names
+    }
 
-    # Преобразуем список Branche в словарь branch_id -> department_id
+    # branch_id -> department_id
     branch_id_to_department = {b.id: b.department_id for b in branches}
 
-    # Фильтруем branchdata_rows
-    filtered_branchdata_rows = [
-        row for row in branchdata_rows
-        if branch_id_to_department.get(row.branch_id) not in ids_aup
+    # --- диапазон дат: последние 60 дней ---
+    today = date.today()
+    date_from = today - timedelta(days=59)
+
+    # --- фильтрация данных ---
+    filtered_rows = [
+        bd for bd in branchdata_rows
+        if bd.record_date
+        and date_from <= bd.record_date <= today
+        and branch_id_to_department.get(bd.branch_id) not in ids_aup
+        and bd.metric_id in metric_id_to_name
     ]
 
-    metrics_sums = defaultdict(lambda: defaultdict(float))
-    date_metrics_present = defaultdict(set)
+    # --- агрегация ---
+    metrics_sums: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    metrics_present: dict[str, set[str]] = defaultdict(set)
 
-    for bd in filtered_branchdata_rows:
+    for bd in filtered_rows:
         date_str = bd.record_date.isoformat()
-        metric_name = metric_map.get(bd.metric_id)
-        if metric_name:
-            metrics_sums[date_str][metric_name] += float(bd.value or 0)
-            date_metrics_present[date_str].add(metric_name)
+        metric_name = metric_id_to_name[bd.metric_id]
 
-    required_metrics = set(metric_map.values())
+        metrics_sums[date_str][metric_name] += float(bd.value or 0)
+        metrics_present[date_str].add(metric_name)
 
-    all_dates = sorted([
-        d for d, metrics_set in date_metrics_present.items()
-        if required_metrics.issubset(metrics_set)
-    ])
+    required_metrics = set(metric_id_to_name.values())
 
-    # только текущий месяц
-    today = datetime.now().date()
-    first_day = today.replace(day=1)
-    all_dates = [d for d in all_dates if datetime.fromisoformat(d).date() >= first_day]
+    # --- только даты, где есть все нужные метрики ---
+    all_dates = sorted(
+        d for d, present in metrics_present.items()
+        if required_metrics.issubset(present)
+    )
 
+    # --- формирование рядов ---
     staff = [metrics_sums[d].get(state_key, 0) for d in all_dates]
     sick = [metrics_sums[d].get(sick_key, 0) for d in all_dates]
     vacation = [metrics_sums[d].get(vacation_key, 0) for d in all_dates]
     fact = [metrics_sums[d].get(fact_key, 0) for d in all_dates]
 
-    working = [max(f - s - v, 0) for f, s, v in zip(fact, sick, vacation, strict=False)]
+    working = [
+        max(f - s - v, 0)
+        for f, s, v in zip(fact, sick, vacation, strict=False)
+    ]
 
     return {
         "dates": all_dates,
@@ -292,7 +307,7 @@ async def get_chart_data(branches: list[Branche], metrics: list[Metric], branchd
         "sick": sick,
         "vacation": vacation,
         "staff": staff,
-        "working": working
+        "working": working,
     }
 
 
