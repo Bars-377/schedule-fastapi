@@ -141,11 +141,21 @@ async def fetch_metrics(db: AsyncSession, user: User):
     metrics = result.scalars().all()
     if user.id == 1:
         return list(metrics)
-    return [m for m in metrics if m.name.lower() != "отсутствие"]  # <-- фильтрация уже по объектам
+
+    # Общая функция фильтрации по объектам
+    def filter_metrics(m: Metric):
+        name_lower = m.name.lower()
+        if user.id == 3:
+            return "отсутствие" not in name_lower and "битрикс" not in name_lower
+        return name_lower != "отсутствие"
+
+    return [m for m in metrics if filter_metrics(m)]
+
 
 async def fetch_branchdata(db: AsyncSession):
     result = await db.execute(select(BranchData))
     return result.scalars().all()
+
 
 def build_latest_data(branchdata_rows: list[BranchData]) -> dict[tuple[int, int], BranchData]:
     latest_data = {}
@@ -242,8 +252,8 @@ async def get_chart_data(
 
     # --- имена метрик из конфига ---
     state_key = config.get("metrics", {}).get("state")
-    sick_key = config.get("metrics", {}).get("sick")
-    vacation_key = config.get("metrics", {}).get("vacation")
+    sick_key = config.get("metrics", {}).get("sick_1c")
+    vacation_key = config.get("metrics", {}).get("vacation_1c")
     fact_key = config.get("metrics", {}).get("fact")
 
     allowed_metric_names = {
@@ -645,6 +655,21 @@ async def login_form(request: Request):
             "register_link": True,
         },
     )
+
+
+@app.get("/login_guest_1")
+async def login_guest_1(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    guest_1_user = await get_user(db, "Guest_1")
+    if guest_1_user:
+        # Убираем права редактирования
+        guest_1_user.can_edit = 0
+
+    request.session["user"] = guest_1_user.username
+
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/login")

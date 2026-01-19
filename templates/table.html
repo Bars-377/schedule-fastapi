@@ -29,11 +29,16 @@
 
 <body>
     <p>
-        {% if user.username != 'Guest' %}
+        {% if not 'Guest' in user.username %}
         Привет, {{ user.username }} |
+        {% endif %}
+        {% if 'Guest_1' in user.username %}
+        Режим с Битрикс |
         {% endif %}
         {% if user.username == 'Guest' %}
         <a href='/login_form'>Войти</a>
+        <br><br>
+        <a href='/login_guest_1'>Режим с Битрикс</a>
         {% else %}
         <a href='/logout'>Выйти</a>
         {% endif %}
