@@ -157,8 +157,8 @@
                         </form>
                     </td>
                     {% else %}
-                    <td {% if loop.index==10 and metric_data.value is number and metric_data.value < 80
-                        %}style="background-color: #ffcccc;" {% endif %}>
+                    <td {% if metric_name=="Квартал Боевая численность" and metric_data.value is number and
+                        metric_data.value < 80 %}style="background-color: #ffcccc;" {% endif %}>
                         {{ metric_data.value }}
                     </td>
                     {% endif %}
