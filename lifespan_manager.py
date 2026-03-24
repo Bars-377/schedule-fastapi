@@ -103,7 +103,7 @@ async def retry_forever(coro_func, *args, delay: int = 5, name: str = "unknown",
 # --- Основной класс менеджера ---
 # ==============================
 class LifespanManager:
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], date_start = None, date_end = None):
         self.config = config
         self.previous_metric_names: set[str] = {n.lower() for n in config.get("previous_metrics", [])}
         self.mysql_pool: aiomysql.Pool | None = None
@@ -113,6 +113,8 @@ class LifespanManager:
         self.email_semaphore = asyncio.Semaphore(1)
         self._email_workers: list[asyncio.Task] = []
         self._background_task: asyncio.Task | None = None
+        self.date_start = date_start
+        self.date_end = date_end
 
     # ------------------------------
     # MySQL pool
@@ -785,6 +787,28 @@ class LifespanManager:
             await recalc(db, today)
             await db.commit()
 
+    async def verarbeitung_start(self):
+        async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
+            departments = await self.fetch_departments_from_bitrix(session)
+            users = await self.fetch_users_from_bitrix(session)
+            
+            # days = [date(2025, 11, 21), date(2025, 12, 4)]
+            if self.date_start and self.date_end:
+                days = [self.date_start, self.date_end]
+            else:
+                days = [date.today()]  # можно переопределить при вызове
+
+            # если выбрано 2 дня, то будет загружаться всё за промежуток этих двух дней
+            if len(days) == 1:
+                await self.verarbeitung(session, users, departments, days[0])
+            else:
+                start = min(days)
+                end = max(days)
+                today = start
+                while today <= end:
+                    await self.verarbeitung(session, users, departments, today)
+                    today += timedelta(days=1)
+
     # ------------------------------
     # Цикл планировщика
     # ------------------------------
@@ -814,22 +838,8 @@ class LifespanManager:
             logger.info(f"Следующее обновление через {wait_seconds / 3600:.2f} ч.")
             await asyncio.sleep(wait_seconds)
 
-            async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
-                departments = await self.fetch_departments_from_bitrix(session)
-                users = await self.fetch_users_from_bitrix(session)
-                days = [date.today()]  # можно переопределить при вызове
-                # days = [date(2025, 11, 21), date(2025, 12, 4)]
-
-                if len(days) == 1:
-                    await self.verarbeitung(session, users, departments, days[0])
-                else:
-                    start = min(days)
-                    end = max(days)
-                    today = start
-                    while today <= end:
-                        await self.verarbeitung(session, users, departments, today)
-                        today += timedelta(days=1)
-
+            await self.verarbeitung_start()
+ 
     # ------------------------------
     # Lifespan helpers (стартап/шутдаун)
     # ------------------------------

@@ -107,7 +107,17 @@
                             </label>
                             <input type="submit" value="Показать">
                         </form>
-
+                        <form method="post" action="/update_1c">
+                            <label>Введите дату начала:
+                                <input type="date" name="date_start" required>
+                            </label>
+                            <br>
+                            <label>Введите дату конца:
+                                <input type="date" name="date_end" required>
+                            </label>
+                            <br>
+                            <input type="submit" value="Отправить">
+                        </form>
                     </td>
                     {% if user.id == 1 %}
                     <td style="background-color: #e0e0e0;"></td>

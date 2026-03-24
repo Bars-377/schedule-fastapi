@@ -2,6 +2,9 @@ import asyncio
 import json
 import os
 import re
+
+from lifespan_manager import LifespanManager
+
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -374,6 +377,30 @@ async def index(
 
     return templates.TemplateResponse("table.html", {**data})
 
+# --- Обновление данных из 1С ---
+@app.post("/update_1c")
+async def update_1c(
+    date_start: date = Form(None),
+    date_end: date = Form(None),
+):
+    # Сначала проверяем, что даты вообще переданы
+    if not date_start or not date_end:
+        return RedirectResponse(
+            "/?msg=Выберите+промежуток&status=500", status_code=303
+        )
+    
+    # Затем проверяем, что конечная дата не в будущем
+    if date_end > date.today():
+        return RedirectResponse(
+            "/?msg=Вы+выбрали+неверную+конечную+дату&status=500", status_code=303
+        )
+
+    manager = LifespanManager(config, date_start, date_end)
+    await manager.verarbeitung_start()
+
+    return RedirectResponse(
+        "/?msg=Данные+из+1С+обновлены&status=200", status_code=303
+    )
 
 # --- Добавление нового филиала ---
 @app.post("/add")
