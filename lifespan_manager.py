@@ -8,6 +8,18 @@
 - Явные проверки и обработка исключений в сетевых/БД-вызовах.
 - Улучшенные docstring'и и читаемость.
 - Сохранена совместимость API функций (асинхронные функции с теми же семантиками).
+
+ИЗМЕНЕНИЯ (фикс SocketTimeoutError на department.get.json):
+- Убран дублирующий поход в Bitrix за department.get.json для каждого сотрудника:
+  список отделов уже загружается один раз в fetch_departments_from_bitrix(),
+  теперь строится локальный словарь {ID: NAME} (dept_lookup) и используется вместо
+  повторных сетевых вызовов в _process_single_user(). Это резко снижает нагрузку
+  на Bitrix и устраняет основную причину массовых таймаутов.
+- Добавлена retry_limited(): для точечных запросов (по одному сотруднику/отделу)
+  теперь ограниченное число попыток (по умолчанию 3), после чего запись логируется
+  как пропущенная и обработка идёт дальше, а не виснет бесконечно.
+- retry_forever оставлен для критичных базовых загрузок (список всех отделов,
+  список всех пользователей) — без них весь пересчёт не имеет смысла.
 """
 
 from __future__ import annotations
@@ -71,21 +83,28 @@ MYSQL_CONFIG = {
 BITRIX_SEMAPHORE_DEFAULT = 10
 BITRIX_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
 
+# Сколько раз пытаться выполнить точечный (не критичный) запрос к Bitrix,
+# прежде чем пропустить запись и пойти дальше.
+BITRIX_RETRY_ATTEMPTS = 3
+BITRIX_RETRY_DELAY = 5
+
 # ==============================
 # --- Вспомогательные типы ---
 # ==============================
 MetricMap = dict[str, int]
 DeptMetricMap = dict[int, dict[int, set[int]]]
 StaffingMap = dict[int, dict[int, set[float]]]
+DeptLookup = dict[int, str]
 
 
 # ==============================
-# --- Retry helper (реиспользуемый) ---
+# --- Retry helpers (реиспользуемые) ---
 # ==============================
 async def retry_forever(coro_func, *args, delay: int = 5, name: str = "unknown", **kwargs):
     """
     Повторяет вызов асинхронной функции пока не выполнится успешно.
-    Позволяет логировать и ждать между попытками.
+    Использовать только для критичных базовых загрузок (без которых весь
+    процесс бессмысленен), т.к. может блокировать выполнение бесконечно.
     """
     attempt = 1
     while True:
@@ -99,11 +118,39 @@ async def retry_forever(coro_func, *args, delay: int = 5, name: str = "unknown",
             attempt += 1
 
 
+async def retry_limited(
+    coro_func,
+    *args,
+    attempts: int = BITRIX_RETRY_ATTEMPTS,
+    delay: int = BITRIX_RETRY_DELAY,
+    name: str = "unknown",
+    **kwargs,
+):
+    """
+    Повторяет вызов асинхронной функции до `attempts` раз.
+    Если все попытки исчерпаны — логирует и возвращает None,
+    вместо того чтобы блокировать выполнение навсегда.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await coro_func(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            logger.error(f"[{name}] Ошибка (попытка {attempt}/{attempts}): {exc}")
+            if attempt < attempts:
+                await asyncio.sleep(delay)
+    logger.error(f"[{name}] Все {attempts} попыток исчерпаны, пропускаем. Последняя ошибка: {last_exc}")
+    return None
+
+
 # ==============================
 # --- Основной класс менеджера ---
 # ==============================
 class LifespanManager:
-    def __init__(self, config: dict[str, Any], date_start = None, date_end = None):
+    def __init__(self, config: dict[str, Any], date_start=None, date_end=None):
         self.config = config
         self.previous_metric_names: set[str] = {n.lower() for n in config.get("previous_metrics", [])}
         self.mysql_pool: aiomysql.Pool | None = None
@@ -150,18 +197,32 @@ class LifespanManager:
     # ------------------------------
     # Bitrix helpers
     # ------------------------------
-    async def fetch_json(self, session: aiohttp.ClientSession, url: str) -> Any:
+    async def fetch_json(self, session: aiohttp.ClientSession, url: str, critical: bool = False) -> Any:
+        """
+        Выполняет GET-запрос к Bitrix и возвращает поле "result".
+
+        critical=True  -> используется retry_forever (запрос жизненно важен,
+                           без него дальнейшая обработка бессмысленна).
+        critical=False -> используется retry_limited, при неудаче возвращается
+                           пустой список, а не бесконечное ожидание.
+        """
         async def _fetch():
             async with self.bitrix_semaphore:
                 async with session.get(url, timeout=BITRIX_TIMEOUT) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
                     return data.get("result", [])
-        return await retry_forever(_fetch, name=f"Bitrix {url}")
+
+        if critical:
+            return await retry_forever(_fetch, name=f"Bitrix {url}")
+
+        result = await retry_limited(_fetch, name=f"Bitrix {url}")
+        return result or []
 
     async def fetch_departments_from_bitrix(self, session: aiohttp.ClientSession) -> list[dict[str, Any]]:
         logger.info("Загрузка списка отделов из Bitrix...")
-        return await self.fetch_json(session, f"{BITRIX_BASE_URL}/department.get.json")
+        # Критичный запрос: без списка отделов дальнейшая обработка бессмысленна.
+        return await self.fetch_json(session, f"{BITRIX_BASE_URL}/department.get.json", critical=True)
 
     async def fetch_users_from_bitrix(self, session: aiohttp.ClientSession) -> list[dict[str, Any]]:
         logger.info("Загрузка списка пользователей из Bitrix...")
@@ -169,7 +230,8 @@ class LifespanManager:
         start = 0
         page_size = 50
         while True:
-            result = await self.fetch_json(session, BITRIX_USER_LIST_URL.format(start=start))
+            # Критичный запрос: постраничная загрузка всех пользователей.
+            result = await self.fetch_json(session, BITRIX_USER_LIST_URL.format(start=start), critical=True)
             if not result:
                 break
             all_users.extend(result)
@@ -178,14 +240,24 @@ class LifespanManager:
         return all_users
 
     async def fetch_user_info(self, session: aiohttp.ClientSession, employee_id: int) -> list[dict[str, Any]]:
+        # Точечный запрос на одного сотрудника: ограниченные ретраи, при неудаче
+        # вернётся [] и сотрудник будет пропущен (не блокирует остальных).
         return await self.fetch_json(session, BITRIX_USER_INFO_URL.format(user_id=employee_id))
 
-    async def fetch_department_info(self, session: aiohttp.ClientSession, dept_id: int) -> tuple[str | None, str | None]:
-        result = await self.fetch_json(session, BITRIX_DEPARTMENT_URL.format(dept_id=dept_id))
-        if not result:
-            return None, None
-        row = result[0]
-        return (row.get("ID", "").strip(), row.get("NAME", "").strip())
+    @staticmethod
+    def build_dept_lookup(departments: Iterable[dict[str, Any]]) -> DeptLookup:
+        """
+        Строит {department_id: name} из уже загруженного списка отделов,
+        чтобы не делать повторный запрос department.get.json на каждого сотрудника.
+        """
+        lookup: DeptLookup = {}
+        for dept in departments:
+            try:
+                dept_id = int(dept.get("ID"))
+            except (TypeError, ValueError):
+                continue
+            lookup[dept_id] = (dept.get("NAME") or "").strip()
+        return lookup
 
     # ------------------------------
     # Работы с метриками и BranchData
@@ -380,6 +452,7 @@ class LifespanManager:
         special_users: DeptMetricMap,
         semaphore: asyncio.Semaphore,
         today: date,
+        dept_lookup: DeptLookup,
     ):
         employee_id = int(user["ID"])
         async with semaphore:
@@ -387,6 +460,7 @@ class LifespanManager:
             user_info_result = await self.fetch_user_info(session, employee_id)
 
         if not user_info_result:
+            logger.warning(f"Не удалось получить данные пользователя {employee_id}, пропускаем.")
             return
 
         user_info = user_info_result[0]
@@ -396,12 +470,12 @@ class LifespanManager:
         dept_name: str | None = None
         if "UF_DEPARTMENT" in user_info and user_info["UF_DEPARTMENT"]:
             dept_id_raw = user_info["UF_DEPARTMENT"][0]
-            async with semaphore:
-                dept_id_str, dept_name = await self.fetch_department_info(session, dept_id_raw)
-                try:
-                    dept_id = int(dept_id_str) if dept_id_str else None
-                except (ValueError, TypeError):
-                    dept_id = None
+            try:
+                dept_id = int(dept_id_raw)
+            except (ValueError, TypeError):
+                dept_id = None
+            # Берём имя отдела из уже загруженного списка (без нового запроса в Bitrix).
+            dept_name = dept_lookup.get(dept_id) if dept_id is not None else None
 
         if not dept_id:
             return
@@ -537,9 +611,16 @@ class LifespanManager:
                     self.mysql_pool = None
                 raise
 
-        return await retry_forever(_fetch, name=f"MySQL fetch_absences ID={employee_id}")
+        result = await retry_limited(_fetch, name=f"MySQL fetch_absences ID={employee_id}")
+        return result or []
 
-    async def process_vacations(self, session: aiohttp.ClientSession, users: list[dict[str, Any]], today: date) -> tuple[DeptMetricMap, DeptMetricMap, DeptMetricMap]:
+    async def process_vacations(
+        self,
+        session: aiohttp.ClientSession,
+        users: list[dict[str, Any]],
+        today: date,
+        dept_lookup: DeptLookup,
+    ) -> tuple[DeptMetricMap, DeptMetricMap, DeptMetricMap]:
         metric_config = self.config.get("metrics", {})
         metric_names = {
             "special": metric_config.get("special", "").lower(),
@@ -577,7 +658,10 @@ class LifespanManager:
                     special_users.setdefault(dept_id, {})[metric_ids["special"]] = set()
 
         tasks = [
-            self._process_single_user(user, session, metric_ids, sick_leaves, all_vacations, special_users, semaphore, today)
+            self._process_single_user(
+                user, session, metric_ids, sick_leaves, all_vacations,
+                special_users, semaphore, today, dept_lookup,
+            )
             for user in users
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -764,11 +848,13 @@ class LifespanManager:
     # Главный процесс верarbeitung (перевычисление)
     # ------------------------------
     async def verarbeitung(self, session: aiohttp.ClientSession, users: list[dict[str, Any]], departments: list[dict[str, Any]], today: date):
+        dept_lookup = self.build_dept_lookup(departments)
+
         async with AsyncSessionLocal() as db:
             metrics = (await db.execute(select(Metric))).scalars().all()
             await self.update_branches(db, departments, metrics, today)
 
-        sick_leaves, all_vacations, special_users = await self.process_vacations(session, users, today)
+        sick_leaves, all_vacations, special_users = await self.process_vacations(session, users, today, dept_lookup)
 
         async with AsyncSessionLocal() as db:
             staffing = await self.staffing_analysis(db, today)
@@ -791,7 +877,7 @@ class LifespanManager:
         async with aiohttp.ClientSession(timeout=BITRIX_TIMEOUT) as session:
             departments = await self.fetch_departments_from_bitrix(session)
             users = await self.fetch_users_from_bitrix(session)
-            
+
             # days = [date(2025, 11, 21), date(2025, 12, 4)]
             if self.date_start and self.date_end:
                 days = [self.date_start, self.date_end]
@@ -839,7 +925,7 @@ class LifespanManager:
             await asyncio.sleep(wait_seconds)
 
             await self.verarbeitung_start()
- 
+
     # ------------------------------
     # Lifespan helpers (стартап/шутдаун)
     # ------------------------------
