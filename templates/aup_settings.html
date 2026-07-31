@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Настройки АУП</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h2>Список отделов Bitrix</h2>
+    <p><a href="{{ bitrix_url }}" target="_blank">{{ bitrix_url }}</a></p>
+
+    <h2>Список ID отделов АУП (ids_aup)</h2>
+    <form method="post" action="/aup_settings/update">
+        <p>Введите ID через запятую или с новой строки:</p>
+        <textarea name="ids_aup" rows="8" cols="40">{{ ids_aup | join(", ") }}</textarea>
+        <br><br>
+        <input type="submit" value="Сохранить" class="table-btn">
+    </form>
+
+    {% if msg %}<p><strong>{{ msg }}</strong></p>{% endif %}
+
+    <p><a href="/">На главную</a></p>
+</body>
+</html>

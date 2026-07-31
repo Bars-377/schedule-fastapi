@@ -24,7 +24,7 @@
                 flex-direction: column;
             }
         }
-        
+
         /* Стили для оверлея, если еще не определены */
         #deletion-overlay {
             display: none;
@@ -126,6 +126,7 @@
                         </form>
                         <!-- ИЗМЕНЕНО: добавлен id="update-1c-form" и onsubmit для показа оверлея -->
                         {% if user.id in (1, 2) %}
+                        <a href="/aup_settings">Настройки АУП</a>
                         <form id="update-1c-form" method="post" action="/update_1c" onsubmit="showOverlay()">
                             <label>Введите дату начала:
                                 <input type="date" name="date_start" required>
@@ -267,7 +268,7 @@
             <canvas id="chartLeave" height="200"></canvas>
         </div>
     </div>
-    
+
     <!-- Оверлей, который будет показан во время выполнения update_1c -->
     <div id="deletion-overlay">
         В процессе...

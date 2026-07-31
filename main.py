@@ -893,6 +893,52 @@ async def update_branch_id(
         status_code=303,
     )
 
+async def require_admin(user=Depends(require_login)):
+    if user.id not in (1, 2):
+        raise HTTPException(status_code=403, detail="Нет прав доступа")
+    return user
+
+
+@app.get("/aup_settings", response_class=HTMLResponse)
+async def aup_settings_page(
+    request: Request,
+    msg: str = None,
+    user=Depends(require_admin),
+):
+    return templates.TemplateResponse(
+        "aup_settings.html",
+        {
+            "request": request,
+            "user": user,
+            "ids_aup": config.get("ids_aup", []),
+            "bitrix_url": "https://bitrix.mfc.tomsk.ru/rest/533/dfk26tp3grjqm2b4/department.get.json",
+            "msg": msg,
+        },
+    )
+
+
+@app.post("/aup_settings/update")
+async def aup_settings_update(
+    ids_aup: str = Form(""),
+    user=Depends(require_admin),
+):
+    raw_ids = re.split(r"[,\s]+", ids_aup.strip())
+    new_ids = []
+    for raw in raw_ids:
+        if not raw:
+            continue
+        try:
+            new_ids.append(int(raw))
+        except ValueError:
+            return RedirectResponse(
+                f"/aup_settings?msg=Неверный+формат+ID:+{raw}", status_code=303
+            )
+
+    config["ids_aup"] = new_ids
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
+    return RedirectResponse("/aup_settings?msg=Список+обновлён", status_code=303)
 
 # --- Запуск сервера ---
 if __name__ == "__main__":
